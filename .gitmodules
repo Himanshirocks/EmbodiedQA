@@ -1,3 +1,6 @@
 [submodule "House3D"]
 	path = House3D
 	url = git@github.com:abhshkdz/House3D.git
+[submodule "SUNCGtoolbox"]
+	path = SUNCGtoolbox
+	url = https://github.com/Himanshirocks/SUNCGtoolbox
