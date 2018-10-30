@@ -170,5 +170,4 @@ typings/
 Emb_das/
 embQA/data/
 embQA/*.json
-embQA/a-star-500/
-
+embQA/a-star-500/*
