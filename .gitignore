@@ -167,3 +167,8 @@ typings/
 # dotenv environment variables file
 .env
 
+Emb_das/
+embQA/data/
+embQA/*.json
+embQA/a-star-500/
+
