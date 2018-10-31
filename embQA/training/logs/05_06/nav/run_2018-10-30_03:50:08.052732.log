@@ -1,0 +1,238 @@
+2018-10-30 03:50:08,052 {'train_h5': 'data/train.h5', 'val_h5': 'data/val.h5', 'test_h5': 'data/test.h5', 'data_json': 'data/data.json', 'vocab_json': 'data/vocab.json', 'target_obj_conn_map_dir': 'data/target-obj-conn-maps/500', 'map_resolution': 500, 'mode': 'train+eval', 'eval_split': 'val', 'model_type': 'pacman', 'max_episode_length': 100, 'curriculum': 0, 'batch_size': 20, 'learning_rate': 0.001, 'max_epochs': 1000, 'overfit': False, 'print_every': 5, 'eval_every': 1000, 'save_every': 1000, 'identifier': 'pacman', 'num_processes': 1, 'max_threads_per_gpu': 10, 'checkpoint_path': False, 'checkpoint_dir': 'checkpoints/05_06/nav/10_30_03:50_pacman', 'log_dir': 'logs/05_06/nav/10_30_03:50_pacman', 'to_log': 1, 'to_cache': False, 'max_controller_actions': 5, 'max_actions': None, 'time_id': '10_30_03:50', 'gpus': [0]}
+2018-10-30 03:50:32,277 TRAIN: train loader has 110 samples
+2018-10-30 03:50:32,866 EVAL: eval_loader has 128 samples
+2018-10-30 03:50:42,297 TRAINING PACMAN planner-loss: 1.430572 controller-loss: 0.713827
+2018-10-30 03:50:42,523 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:50:52,525 TRAINING PACMAN planner-loss: 1.163442 controller-loss: 0.583044
+2018-10-30 03:50:52,762 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:51:02,054 TRAINING PACMAN planner-loss: 1.079404 controller-loss: 0.603991
+2018-10-30 03:51:02,273 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:51:12,425 TRAINING PACMAN planner-loss: 1.047358 controller-loss: 0.590328
+2018-10-30 03:51:12,673 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:51:20,826 TRAINING PACMAN planner-loss: 1.040055 controller-loss: 0.569148
+2018-10-30 03:51:21,121 TRAIN: metrics: [split:train][thread:1][iters:5][planner_loss:1.36555][controller_loss:0.69016]
+2018-10-30 03:51:21,121 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:51:25,238 TRAINING PACMAN planner-loss: 1.002379 controller-loss: 0.554112
+2018-10-30 03:51:25,405 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:51:54,994 TRAINING PACMAN planner-loss: 0.978743 controller-loss: 0.624198
+2018-10-30 03:51:55,336 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:05,855 TRAINING PACMAN planner-loss: 0.929334 controller-loss: 0.607683
+2018-10-30 03:52:06,081 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:15,426 TRAINING PACMAN planner-loss: 0.943974 controller-loss: 0.608382
+2018-10-30 03:52:15,649 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:24,728 TRAINING PACMAN planner-loss: 0.890191 controller-loss: 0.623898
+2018-10-30 03:52:24,958 TRAIN: metrics: [split:train][thread:1][iters:10][planner_loss:1.27070][controller_loss:0.67088]
+2018-10-30 03:52:24,959 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:35,254 TRAINING PACMAN planner-loss: 0.880610 controller-loss: 0.606780
+2018-10-30 03:52:35,478 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:45,943 TRAINING PACMAN planner-loss: 0.887314 controller-loss: 0.599944
+2018-10-30 03:52:46,149 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:52:49,500 TRAINING PACMAN planner-loss: 0.849367 controller-loss: 0.545778
+2018-10-30 03:52:49,662 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:53:17,262 TRAINING PACMAN planner-loss: 0.810128 controller-loss: 0.623150
+2018-10-30 03:53:17,468 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:53:28,190 TRAINING PACMAN planner-loss: 0.775672 controller-loss: 0.667381
+2018-10-30 03:53:28,425 TRAIN: metrics: [split:train][thread:1][iters:15][planner_loss:1.17274][controller_loss:0.65714]
+2018-10-30 03:53:28,426 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:53:39,437 TRAINING PACMAN planner-loss: 0.783720 controller-loss: 0.649250
+2018-10-30 03:53:39,662 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:53:48,254 TRAINING PACMAN planner-loss: 0.810328 controller-loss: 0.626528
+2018-10-30 03:53:48,454 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:53:57,711 TRAINING PACMAN planner-loss: 0.789735 controller-loss: 0.613348
+2018-10-30 03:53:57,937 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:54:05,509 TRAINING PACMAN planner-loss: 0.775307 controller-loss: 0.607434
+2018-10-30 03:54:05,710 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:54:34,699 TRAINING PACMAN planner-loss: 0.835504 controller-loss: 0.618441
+2018-10-30 03:54:34,907 TRAIN: metrics: [split:train][thread:1][iters:20][planner_loss:1.08833][controller_loss:0.64923]
+2018-10-30 03:54:34,908 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:54:44,073 TRAINING PACMAN planner-loss: 0.838363 controller-loss: 0.606760
+2018-10-30 03:54:44,289 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:54:53,068 TRAINING PACMAN planner-loss: 0.809155 controller-loss: 0.613092
+2018-10-30 03:54:53,267 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:55:01,225 TRAINING PACMAN planner-loss: 0.816588 controller-loss: 0.598314
+2018-10-30 03:55:01,438 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:55:04,941 TRAINING PACMAN planner-loss: 0.719121 controller-loss: 0.622231
+2018-10-30 03:55:05,095 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:55:32,213 TRAINING PACMAN planner-loss: 0.836453 controller-loss: 0.571480
+2018-10-30 03:55:32,425 TRAIN: metrics: [split:train][thread:1][iters:25][planner_loss:1.02379][controller_loss:0.63849]
+2018-10-30 03:55:32,426 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:55:41,459 TRAINING PACMAN planner-loss: 0.796946 controller-loss: 0.587131
+2018-10-30 03:55:41,683 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:55:51,132 TRAINING PACMAN planner-loss: 0.811892 controller-loss: 0.587125
+2018-10-30 03:55:51,349 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:00,896 TRAINING PACMAN planner-loss: 0.807183 controller-loss: 0.578220
+2018-10-30 03:56:01,086 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:09,958 TRAINING PACMAN planner-loss: 0.800674 controller-loss: 0.573885
+2018-10-30 03:56:10,155 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:17,867 TRAINING PACMAN planner-loss: 0.741925 controller-loss: 0.611331
+2018-10-30 03:56:18,075 TRAIN: metrics: [split:train][thread:1][iters:30][planner_loss:0.97100][controller_loss:0.62705]
+2018-10-30 03:56:18,076 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:21,371 TRAINING PACMAN planner-loss: 0.789086 controller-loss: 0.599247
+2018-10-30 03:56:21,518 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:48,714 TRAINING PACMAN planner-loss: 0.744541 controller-loss: 0.597817
+2018-10-30 03:56:48,963 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:56:57,947 TRAINING PACMAN planner-loss: 0.771249 controller-loss: 0.605244
+2018-10-30 03:56:58,151 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:57:07,778 TRAINING PACMAN planner-loss: 0.793298 controller-loss: 0.580720
+2018-10-30 03:57:07,989 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:57:17,929 TRAINING PACMAN planner-loss: 0.777297 controller-loss: 0.588276
+2018-10-30 03:57:18,115 TRAIN: metrics: [split:train][thread:1][iters:35][planner_loss:0.92675][controller_loss:0.61954]
+2018-10-30 03:57:18,117 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:57:27,404 TRAINING PACMAN planner-loss: 0.807607 controller-loss: 0.579805
+2018-10-30 03:57:27,607 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:57:29,516 TRAINING PACMAN planner-loss: 0.747158 controller-loss: 0.567100
+2018-10-30 03:57:29,695 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:57:56,713 TRAINING PACMAN planner-loss: 0.752277 controller-loss: 0.597590
+2018-10-30 03:57:56,928 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:04,267 TRAINING PACMAN planner-loss: 0.780442 controller-loss: 0.562305
+2018-10-30 03:58:04,441 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:12,072 TRAINING PACMAN planner-loss: 0.797069 controller-loss: 0.578081
+2018-10-30 03:58:12,249 TRAIN: metrics: [split:train][thread:1][iters:40][planner_loss:0.89289][controller_loss:0.60989]
+2018-10-30 03:58:12,251 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:19,861 TRAINING PACMAN planner-loss: 0.778062 controller-loss: 0.591104
+2018-10-30 03:58:20,051 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:28,167 TRAINING PACMAN planner-loss: 0.767471 controller-loss: 0.604148
+2018-10-30 03:58:28,343 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:34,979 TRAINING PACMAN planner-loss: 0.766956 controller-loss: 0.587073
+2018-10-30 03:58:35,165 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:58:50,372 EVAL: metrics: [split:val][thread:0][iters:128][d_0_10:3.71783][d_0_30:5.45389][d_0_50:9.20392][d_T_10:4.50939][d_T_30:5.49799][d_T_50:7.69098][d_D_10:-0.79156][d_D_30:-0.04410][d_D_50:1.51294][d_min_10:2.75622][d_min_30:3.51376][d_min_50:6.23998][r_T_10:0.52773][r_T_30:0.32812][r_T_50:0.10351][r_e_10:0.76387][r_e_30:0.49219][r_e_50:0.19034][stop_10:0.03939][stop_30:0.03906][stop_50:0.04036][ep_len_10:96.11634][ep_len_30:96.13281][ep_len_50:96.02005]
+2018-10-30 03:58:50,372 EVAL: epoch 0
+2018-10-30 03:58:50,372 EVAL: invalids [[279327, 50], [279303, 10], [278723, 50]]
+2018-10-30 03:59:02,769 TRAINING PACMAN planner-loss: 0.759804 controller-loss: 0.600174
+2018-10-30 03:59:02,947 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:59:11,670 TRAINING PACMAN planner-loss: 0.756734 controller-loss: 0.595931
+2018-10-30 03:59:11,860 TRAIN: metrics: [split:train][thread:1][iters:45][planner_loss:0.86402][controller_loss:0.60669]
+2018-10-30 03:59:11,862 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:59:22,402 TRAINING PACMAN planner-loss: 0.722638 controller-loss: 0.594517
+2018-10-30 03:59:22,709 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:59:32,498 TRAINING PACMAN planner-loss: 0.715473 controller-loss: 0.599652
+2018-10-30 03:59:32,717 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:59:42,538 TRAINING PACMAN planner-loss: 0.729939 controller-loss: 0.599169
+2018-10-30 03:59:42,745 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 03:59:52,041 TRAINING PACMAN planner-loss: 0.752179 controller-loss: 0.584861
+2018-10-30 03:59:52,329 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:18,335 TRAINING PACMAN planner-loss: 0.792161 controller-loss: 0.584202
+2018-10-30 04:00:18,536 TRAIN: metrics: [split:train][thread:1][iters:50][planner_loss:0.83694][controller_loss:0.60339]
+2018-10-30 04:00:18,538 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:26,315 TRAINING PACMAN planner-loss: 0.788946 controller-loss: 0.576861
+2018-10-30 04:00:26,498 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:34,067 TRAINING PACMAN planner-loss: 0.780835 controller-loss: 0.584669
+2018-10-30 04:00:34,275 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:42,876 TRAINING PACMAN planner-loss: 0.777430 controller-loss: 0.600459
+2018-10-30 04:00:43,082 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:52,360 TRAINING PACMAN planner-loss: 0.804487 controller-loss: 0.592697
+2018-10-30 04:00:52,558 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:00:54,255 TRAINING PACMAN planner-loss: 0.739091 controller-loss: 0.561498
+2018-10-30 04:00:54,390 TRAIN: metrics: [split:train][thread:1][iters:55][planner_loss:0.82346][controller_loss:0.59877]
+2018-10-30 04:00:54,391 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:01:24,513 TRAINING PACMAN planner-loss: 0.809267 controller-loss: 0.566839
+2018-10-30 04:01:24,756 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:01:32,337 TRAINING PACMAN planner-loss: 0.777658 controller-loss: 0.595974
+2018-10-30 04:01:32,528 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:01:41,711 TRAINING PACMAN planner-loss: 0.765413 controller-loss: 0.577408
+2018-10-30 04:01:41,919 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:01:51,024 TRAINING PACMAN planner-loss: 0.780586 controller-loss: 0.556071
+2018-10-30 04:01:51,248 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:01:58,433 TRAINING PACMAN planner-loss: 0.796331 controller-loss: 0.572038
+2018-10-30 04:01:58,632 TRAIN: metrics: [split:train][thread:1][iters:60][planner_loss:0.81491][controller_loss:0.59302]
+2018-10-30 04:01:58,633 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:02:22,684 TRAINING PACMAN planner-loss: 0.750321 controller-loss: 0.590291
+2018-10-30 04:02:22,876 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:02:31,074 TRAINING PACMAN planner-loss: 0.740238 controller-loss: 0.582017
+2018-10-30 04:02:31,254 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:02:39,480 TRAINING PACMAN planner-loss: 0.748567 controller-loss: 0.599116
+2018-10-30 04:02:39,699 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:02:48,485 TRAINING PACMAN planner-loss: 0.724132 controller-loss: 0.580196
+2018-10-30 04:02:48,681 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:02:58,092 TRAINING PACMAN planner-loss: 0.734928 controller-loss: 0.579643
+2018-10-30 04:02:58,289 TRAIN: metrics: [split:train][thread:1][iters:65][planner_loss:0.79777][controller_loss:0.59144]
+2018-10-30 04:02:58,291 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:01,552 TRAINING PACMAN planner-loss: 0.770295 controller-loss: 0.550970
+2018-10-30 04:03:01,691 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:26,494 TRAINING PACMAN planner-loss: 0.773268 controller-loss: 0.580335
+2018-10-30 04:03:26,696 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:34,241 TRAINING PACMAN planner-loss: 0.770228 controller-loss: 0.570226
+2018-10-30 04:03:34,431 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:43,259 TRAINING PACMAN planner-loss: 0.756292 controller-loss: 0.572795
+2018-10-30 04:03:43,465 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:51,493 TRAINING PACMAN planner-loss: 0.744952 controller-loss: 0.542672
+2018-10-30 04:03:51,676 TRAIN: metrics: [split:train][thread:1][iters:70][planner_loss:0.78975][controller_loss:0.58503]
+2018-10-30 04:03:51,679 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:03:59,905 TRAINING PACMAN planner-loss: 0.744503 controller-loss: 0.578463
+2018-10-30 04:04:00,087 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:04:07,831 TRAINING PACMAN planner-loss: 0.758146 controller-loss: 0.580974
+2018-10-30 04:04:08,015 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:04:14,856 TRAINING PACMAN planner-loss: 0.763581 controller-loss: 0.560846
+2018-10-30 04:04:15,030 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:04:40,713 TRAINING PACMAN planner-loss: 0.724041 controller-loss: 0.586762
+2018-10-30 04:04:40,936 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:04:49,424 TRAINING PACMAN planner-loss: 0.741728 controller-loss: 0.557016
+2018-10-30 04:04:49,628 TRAIN: metrics: [split:train][thread:1][iters:75][planner_loss:0.77985][controller_loss:0.58218]
+2018-10-30 04:04:49,630 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:04:58,254 TRAINING PACMAN planner-loss: 0.699501 controller-loss: 0.586737
+2018-10-30 04:04:58,520 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:05:05,888 TRAINING PACMAN planner-loss: 0.737036 controller-loss: 0.556623
+2018-10-30 04:05:06,080 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:05:13,528 TRAINING PACMAN planner-loss: 0.719216 controller-loss: 0.591375
+2018-10-30 04:05:13,710 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:05:21,067 TRAINING PACMAN planner-loss: 0.759096 controller-loss: 0.548168
+2018-10-30 04:05:21,262 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:05:25,033 TRAINING PACMAN planner-loss: 0.732635 controller-loss: 0.554087
+2018-10-30 04:05:25,192 TRAIN: metrics: [split:train][thread:1][iters:80][planner_loss:0.76866][controller_loss:0.57867]
+2018-10-30 04:05:25,194 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:01,487 TRAINING PACMAN planner-loss: 0.699676 controller-loss: 0.589500
+2018-10-30 04:06:01,692 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:11,041 TRAINING PACMAN planner-loss: 0.714391 controller-loss: 0.574592
+2018-10-30 04:06:11,370 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:21,231 TRAINING PACMAN planner-loss: 0.694623 controller-loss: 0.580081
+2018-10-30 04:06:21,441 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:31,880 TRAINING PACMAN planner-loss: 0.745980 controller-loss: 0.567551
+2018-10-30 04:06:32,106 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:41,796 TRAINING PACMAN planner-loss: 0.727275 controller-loss: 0.569499
+2018-10-30 04:06:42,007 TRAIN: metrics: [split:train][thread:1][iters:85][planner_loss:0.75704][controller_loss:0.57801]
+2018-10-30 04:06:42,010 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:06:44,931 TRAINING PACMAN planner-loss: 0.768879 controller-loss: 0.558341
+2018-10-30 04:06:45,177 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:07:15,023 TRAINING PACMAN planner-loss: 0.742332 controller-loss: 0.576356
+2018-10-30 04:07:15,235 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:07:23,082 EVAL: metrics: [split:val][thread:0][iters:231][d_0_10:3.72199][d_0_30:5.40984][d_0_50:9.45676][d_T_10:4.53215][d_T_30:5.16685][d_T_50:7.80356][d_D_10:-0.81016][d_D_30:0.24298][d_D_50:1.65319][d_min_10:2.82457][d_min_30:3.44844][d_min_50:6.38573][r_T_10:0.50455][r_T_30:0.34341][r_T_50:0.07900][r_e_10:0.72630][r_e_30:0.48262][r_e_50:0.17040][stop_10:0.02615][stop_30:0.02180][stop_50:0.02237][ep_len_10:97.43676][ep_len_30:97.84184][ep_len_50:97.79466]
+2018-10-30 04:07:23,082 EVAL: epoch 0
+2018-10-30 04:07:23,082 EVAL: invalids [[279327, 50], [279303, 10], [278723, 50], [452733, 30]]
+2018-10-30 04:07:24,635 TRAINING PACMAN planner-loss: 0.728848 controller-loss: 0.565149
+2018-10-30 04:07:24,814 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:07:32,800 TRAINING PACMAN planner-loss: 0.677119 controller-loss: 0.594959
+2018-10-30 04:07:33,053 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:07:41,020 TRAINING PACMAN planner-loss: 0.727212 controller-loss: 0.577476
+2018-10-30 04:07:41,219 TRAIN: metrics: [split:train][thread:1][iters:90][planner_loss:0.75033][controller_loss:0.57734]
+2018-10-30 04:07:41,222 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:07:42,641 TRAINING PACMAN planner-loss: 0.733047 controller-loss: 0.571328
+2018-10-30 04:07:42,779 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:08:19,249 TRAINING PACMAN planner-loss: 0.678553 controller-loss: 0.581597
+2018-10-30 04:08:19,459 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:08:29,025 TRAINING PACMAN planner-loss: 0.656577 controller-loss: 0.572766
+2018-10-30 04:08:29,267 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:08:39,742 TRAINING PACMAN planner-loss: 0.693580 controller-loss: 0.581074
+2018-10-30 04:08:39,969 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:08:48,925 TRAINING PACMAN planner-loss: 0.639059 controller-loss: 0.591165
+2018-10-30 04:08:49,147 TRAIN: metrics: [split:train][thread:1][iters:95][planner_loss:0.73406][controller_loss:0.57794]
+2018-10-30 04:08:49,150 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:08:59,338 TRAINING PACMAN planner-loss: 0.696847 controller-loss: 0.580625
+2018-10-30 04:08:59,579 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:09:01,172 TRAINING PACMAN planner-loss: 0.791270 controller-loss: 0.546499
+2018-10-30 04:09:01,306 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:09:36,015 TRAINING PACMAN planner-loss: 0.693577 controller-loss: 0.563668
+2018-10-30 04:09:36,252 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:09:46,858 TRAINING PACMAN planner-loss: 0.679449 controller-loss: 0.560360
+2018-10-30 04:09:47,122 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:09:57,009 TRAINING PACMAN planner-loss: 0.699346 controller-loss: 0.580754
+2018-10-30 04:09:57,240 TRAIN: metrics: [split:train][thread:1][iters:100][planner_loss:0.72884][controller_loss:0.57536]
+2018-10-30 04:09:57,244 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:10:06,505 TRAINING PACMAN planner-loss: 0.700120 controller-loss: 0.553893
+2018-10-30 04:10:06,719 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:10:17,127 TRAINING PACMAN planner-loss: 0.683572 controller-loss: 0.552815
+2018-10-30 04:10:17,395 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:10:25,904 TRAINING PACMAN planner-loss: 0.687414 controller-loss: 0.579322
+2018-10-30 04:10:26,134 TRAIN: [CHECK][Cache:0][Total:6639]
+2018-10-30 04:16:03,846 EVAL: metrics: [split:val][thread:0][iters:355][d_0_10:3.44962][d_0_30:5.38065][d_0_50:9.54694][d_T_10:4.35740][d_T_30:5.16036][d_T_50:7.76185][d_D_10:-0.90778][d_D_30:0.22029][d_D_50:1.78509][d_min_10:2.54588][d_min_30:3.29507][d_min_50:6.22597][r_T_10:0.48324][r_T_30:0.32205][r_T_50:0.09366][r_e_10:0.70359][r_e_30:0.47179][r_e_50:0.18131][stop_10:0.07899][stop_30:0.05362][stop_50:0.01737][ep_len_10:93.68984][ep_len_30:97.24356][ep_len_50:98.37061]
+2018-10-30 04:16:03,846 EVAL: epoch 0
+2018-10-30 04:16:03,846 EVAL: invalids [[279327, 50], [279303, 10], [278723, 50], [452733, 30]]

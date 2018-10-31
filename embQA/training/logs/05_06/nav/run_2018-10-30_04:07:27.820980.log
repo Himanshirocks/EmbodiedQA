@@ -1,0 +1,10 @@
+2018-10-30 04:07:27,821 {'train_h5': 'data/train.h5', 'val_h5': 'data/val.h5', 'test_h5': 'data/test.h5', 'data_json': 'data/data.json', 'vocab_json': 'data/vocab.json', 'target_obj_conn_map_dir': 'data/target-obj-conn-maps/500', 'map_resolution': 500, 'mode': 'train+eval', 'eval_split': 'train', 'model_type': 'pacman', 'max_episode_length': 100, 'curriculum': 0, 'batch_size': 20, 'learning_rate': 0.001, 'max_epochs': 1000, 'overfit': True, 'print_every': 5, 'eval_every': 1000, 'save_every': 1000, 'identifier': 'pacman', 'num_processes': 1, 'max_threads_per_gpu': 10, 'checkpoint_path': False, 'checkpoint_dir': 'checkpoints/05_06/nav/10_30_04:07_pacman', 'log_dir': 'logs/05_06/nav/10_30_04:07_pacman', 'to_log': 1, 'to_cache': False, 'max_controller_actions': 5, 'max_actions': None, 'time_id': '10_30_04:07', 'gpus': [0]}
+2018-10-30 04:07:30,912 Trying to overfit to [house de91d49a35edf38cc13b5d36cb5906cf]
+2018-10-30 04:07:30,945 Trying to overfit to [house de91d49a35edf38cc13b5d36cb5906cf]
+2018-10-30 04:07:40,378 EVAL: eval_loader has 1 samples
+2018-10-30 04:07:40,456 TRAIN: train loader has 1 samples
+2018-10-30 04:07:41,961 TRAINING PACMAN planner-loss: 1.396072 controller-loss: 0.679253
+2018-10-30 04:07:42,334 TRAIN: [CHECK][Cache:0][Total:1]
+2018-10-30 04:07:55,068 EVAL: metrics: [split:train][thread:0][iters:1][d_0_10:4.17722][d_0_30:2.53165][d_0_50:6.11814][d_T_10:4.17722][d_T_30:2.74262][d_T_50:3.33333][d_D_10:0.00000][d_D_30:-0.21097][d_D_50:2.78481][d_min_10:4.17722][d_min_30:2.53165][d_min_50:3.33333][r_T_10:1.00000][r_T_30:1.00000][r_T_50:1.00000][r_e_10:1.00000][r_e_30:1.00000][r_e_50:1.00000][stop_10:0.00000][stop_30:0.00000][stop_50:0.00000][ep_len_10:100.00000][ep_len_30:100.00000][ep_len_50:100.00000]
+2018-10-30 04:07:55,069 EVAL: epoch 0
+2018-10-30 04:07:55,069 EVAL: invalids []
