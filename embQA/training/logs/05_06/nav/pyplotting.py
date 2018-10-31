@@ -19,7 +19,9 @@ plt.ylabel('Mean Loss')
 
 
 for i in range(len(statistics)):
+ i
  iters.append(i)
+ statistics[i][0]
  stat.append(statistics[i][0])
  
 
