@@ -5,45 +5,29 @@ import matplotlib.pyplot as plt
 
 iters = []
 stat = []
+stat1 = []
 
 config = json.loads(open('10_30_03:50_pacman/train_1.json').read())
 
 
 statistics = config['stats']
 
-
+for i in range(len(statistics)):
+ iters.append(i)
+ stat.append(statistics[i][0])
+ stat1.append(statistics[i][1])
+ 
+plt.figure(1)
 plt.title('Training Progress (Navigation) in terms of Planner Loss')
 plt.xlabel('Iterations')
-plt.ylabel('Mean Loss')	
-		
-
-
-for i in range(len(statistics)):
- print(i)
- iters.append(i)
- print(statistics[i][0])
- stat.append(statistics[i][0])
- 
-
+plt.ylabel('Mean Loss')
 plt.plot(iters,stat)
 plt.savefig('planner_losses')
 
-
-iters1 = []
-stat1 = []
+plt.figure(2)
 plt.title('Training Progress (Navigation) in terms of Controller Loss')
 plt.xlabel('Iterations')
 plt.ylabel('Mean Loss')	
-		
-
-
-for i in range(len(statistics)):
- print(i)
- iters1.append(i)
- print(statistics[i][1])
- stat1.append(statistics[i][1])
- 
-
-plt.plot(iters1,stat1)
+plt.plot(iters,stat1)
 plt.savefig('controller_losses')
 
