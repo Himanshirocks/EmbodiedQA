@@ -21,8 +21,8 @@ plt.ylabel('Mean Loss')
 for i in range(len(statistics)):
  iters.append(i)
  stat.append(statistics[i][0])
- plt.plot(iters,stat)
+ 
 
-
+plt.plot(iters,stat)
 plt.savefig('myfig')
 
