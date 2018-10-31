@@ -36,7 +36,8 @@ except AttributeError:
 
 def eval(rank, args, shared_model):
 
-    torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
+    #torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     if args.model_type == 'cnn':
 
@@ -92,7 +93,7 @@ def eval(rank, args, shared_model):
         'num_frames': 5,
         'split': args.eval_split,
         'max_threads_per_gpu': args.max_threads_per_gpu,
-        'gpu_id': args.gpus[rank % len(args.gpus)],
+        'gpu_id': 0,
         'to_cache': False,
         'overfit': args.overfit,
         'max_controller_actions': args.max_controller_actions,
@@ -507,7 +508,7 @@ def eval(rank, args, shared_model):
                 for batch in tqdm(eval_loader):
 
                     model.load_state_dict(shared_model.state_dict())
-                    model.cuda()
+                    model.to(device)
 
                     idx, question, answer, actions, action_length = batch
                     metrics_slug = {}
@@ -523,7 +524,7 @@ def eval(rank, args, shared_model):
                             invalids.append([idx[0], i])
                             continue
 
-                        question_var = Variable(question.cuda())
+                        question_var = Variable(question.to(device))
 
                         controller_step = False
                         planner_hidden = model.planner_nav_rnn.init_hidden(1)
@@ -539,9 +540,9 @@ def eval(rank, args, shared_model):
                         )
 
                         planner_actions_in_var = Variable(
-                            planner_actions_in.cuda())
+                            planner_actions_in.to(device))
                         planner_img_feats_var = Variable(
-                            planner_img_feats.cuda())
+                            planner_img_feats.to(device))
                     
                         # forward planner till spawn to update hidden state
                         for step in range(planner_actions_in.size(0)):
@@ -585,15 +586,15 @@ def eval(rank, args, shared_model):
                                     2, 0, 1)).float() / 255.0
                                 img_feat_var = eval_loader.dataset.cnn(
                                     Variable(img.view(1, 3, 224,
-                                                      224).cuda())).view(
+                                                      224).to(device))).view(
                                                           1, 1, 3200)
                             else:
-                                img_feat_var = Variable(controller_img_feats.cuda()).view(1, 1, 3200)
+                                img_feat_var = Variable(controller_img_feats.to(device)).view(1, 1, 3200)
 
                             if not first_step or first_step_is_controller:
                                 # query controller to continue or not
                                 controller_action_in = Variable(
-                                    torch.LongTensor(1, 1).fill_(action).cuda())
+                                    torch.LongTensor(1, 1).fill_(action).to(device))
                                 controller_scores = model.controller_step(
                                     img_feat_var, controller_action_in,
                                     planner_hidden[0])
@@ -616,7 +617,7 @@ def eval(rank, args, shared_model):
                             if planner_step:
                                 if not first_step:
                                     action_in = torch.LongTensor(
-                                        1, 1).fill_(action + 1).cuda()
+                                        1, 1).fill_(action + 1).to(device)
                                     planner_scores, planner_hidden = model.planner_step(
                                         question_var, img_feat_var,
                                         Variable(action_in), planner_hidden)
@@ -1206,13 +1207,15 @@ if __name__ == '__main__':
                         level=logging.INFO,
                         format='%(asctime)-15s %(message)s')
 
-    try:
-        args.gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-        args.gpus = [int(x) for x in args.gpus]
-    except KeyError:
-        print("CPU not supported")
-        logging.info("CPU not supported")
-        exit()
+    #try:
+    #    args.gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+    #    args.gpus = [int(x) for x in args.gpus]
+    #except KeyError:
+    #    print("CPU not supported")
+    #    logging.info("CPU not supported")
+    #    exit()
+
+    args.gpus = 0
 
     if args.checkpoint_path != False:
 
