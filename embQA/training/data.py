@@ -163,6 +163,7 @@ class EqaDataset(Dataset):
 
         self.data_json = data_json
         self.split = split
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.gpu_id = gpu_id
 
         self.input_type = input_type
@@ -233,7 +234,7 @@ class EqaDataset(Dataset):
                 cnn_kwargs = {'num_classes': 191, 'pretrained': True}
                 self.cnn = MultitaskCNN(**cnn_kwargs)
                 self.cnn.eval()
-                self.cnn.cuda()
+                self.cnn.to(self.device)
 
             self.pos_queue = data[self.split + '_pos_queue']
             self.boxes = data[self.split + '_boxes']
@@ -314,9 +315,10 @@ class EqaDataset(Dataset):
                         w=224, h=224, device=self.gpu_id))
 
         try:
+            # self.cfg = load_config('/home/satyen/GitHub_repos/our_EQA/House3D/tests/config.json')
             self.cfg = load_config('../House3D/tests/config.json')
         except:
-            self.cfg = load_config('../../House3D/tests/config.json') #Sorry guys; this is so Lisa can run on her system; maybe we should make this an input somewhere?
+            self.cfg = load_config('../../House3D/tests/config.json') 
 
         print('[%.02f] Loaded %d api threads' % (time.time() - start,
                                                  len(self.api_threads)))
@@ -454,7 +456,7 @@ class EqaDataset(Dataset):
             preprocess=True)
         raw_img_feats = self.cnn(
             Variable(torch.FloatTensor(images)
-                     .cuda())).data.cpu().numpy().copy()
+                     .to(self.device))).data.cpu().numpy().copy()
 
         controller_img_feat = torch.from_numpy(raw_img_feats[target_pos_idx].copy())
         controller_action_in = pa_pruned[-1] - 2
@@ -526,7 +528,7 @@ class EqaDataset(Dataset):
                     preprocess=True)
                 img_feats = self.cnn(
                     Variable(torch.FloatTensor(images)
-                             .cuda())).data.cpu().numpy().copy()
+                             .to(self.device))).data.cpu().numpy().copy()
                 if self.to_cache == True:
                     self.img_data_cache[index] = img_feats
 
@@ -617,7 +619,7 @@ class EqaDataset(Dataset):
                         preprocess=True)
                     raw_img_feats = self.cnn(
                         Variable(torch.FloatTensor(images)
-                                 .cuda())).data.cpu().numpy().copy()
+                                 .to(self.device))).data.cpu().numpy().copy()
                     img_feats = np.zeros(
                         (self.actions.shape[1], raw_img_feats.shape[1]),
                         dtype=np.float32)
@@ -712,7 +714,7 @@ class EqaDataset(Dataset):
                         preprocess=True)
                     raw_img_feats = self.cnn(
                         Variable(torch.FloatTensor(images)
-                                 .cuda())).data.cpu().numpy().copy()
+                                 .to(self.device))).data.cpu().numpy().copy()
                     img_feats = np.zeros(
                         (self.actions.shape[1], raw_img_feats.shape[1]),
                         dtype=np.float32)

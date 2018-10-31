@@ -16,7 +16,7 @@ from data import load_vocab
 from torch.autograd import Variable
 from tqdm import tqdm
 import time
-
+import cv2
 torch.backends.cudnn.enabled = False
 
 ################################################################################################
@@ -140,7 +140,7 @@ def eval(rank, args, shared_model):
                 for batch in tqdm(eval_loader):
 
                     model.load_state_dict(shared_model.state_dict())
-                    model.cuda()
+                    model.to(device)
 
                     idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
                     metrics_slug = {}
@@ -176,9 +176,9 @@ def eval(rank, args, shared_model):
                             invalids.append(idx[0])
                             continue
 
-                        sub_img_feats_var = Variable(sub_img_feats.cuda())
+                        sub_img_feats_var = Variable(sub_img_feats.to(device))
                         if '+q' in args.model_type:
-                            questions_var = Variable(questions.cuda())
+                            questions_var = Variable(questions.to(device))
 
                         # sample actions till max steps or <stop>
                         # max no. of actions = 100
@@ -214,7 +214,7 @@ def eval(rank, args, shared_model):
                                 2, 0, 1)).float() / 255.0
                             img_feat_var = eval_loader.dataset.cnn(
                                 Variable(img.view(1, 3, 224, 224)
-                                         .cuda())).view(1, 1, 3200)
+                                         .to(device))).view(1, 1, 3200)
                             sub_img_feats_var = torch.cat(
                                 [sub_img_feats_var, img_feat_var], dim=1)
                             sub_img_feats_var = sub_img_feats_var[:, -5:, :]
@@ -299,10 +299,10 @@ def eval(rank, args, shared_model):
                 for batch in tqdm(eval_loader):
 
                     model.load_state_dict(shared_model.state_dict())
-                    model.cuda()
+                    model.to(device)
 
                     idx, questions, answer, _, actions_in, actions_out, action_lengths, _ = batch
-                    question_var = Variable(questions.cuda())
+                    question_var = Variable(questions.to(device))
                     metrics_slug = {}
 
                     # evaluate at multiple initializations
@@ -324,12 +324,12 @@ def eval(rank, args, shared_model):
                                 eval_loader.dataset.episode_pos_queue[:-i],
                                 preprocess=True)
                             raw_img_feats = eval_loader.dataset.cnn(
-                                Variable(torch.FloatTensor(images).cuda()))
+                                Variable(torch.FloatTensor(images).to(device)))
 
                             actions_in_pruned = actions_in[:, :
                                                            action_lengths[0] -
                                                            i]
-                            actions_in_var = Variable(actions_in_pruned.cuda())
+                            actions_in_var = Variable(actions_in_pruned.to(device))
                             action_lengths_pruned = action_lengths.clone(
                             ).fill_(action_lengths[0] - i)
                             img_feats_var = raw_img_feats.view(1, -1, 3200)
@@ -352,12 +352,12 @@ def eval(rank, args, shared_model):
 
                             action_in = torch.LongTensor(1, 1).fill_(
                                 actions_in[0,
-                                           action_lengths[0] - i]).cuda()
+                                           action_lengths[0] - i]).to(device)
                         else:
                             init_pos = eval_loader.dataset.episode_pos_queue[
                                 -i]
                             hidden = model.nav_rnn.init_hidden(1)
-                            action_in = torch.LongTensor(1, 1).fill_(0).cuda()
+                            action_in = torch.LongTensor(1, 1).fill_(0).to(device)
 
                         h3d.env.reset(
                             x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
@@ -372,7 +372,7 @@ def eval(rank, args, shared_model):
                         img = torch.from_numpy(img.transpose(
                             2, 0, 1)).float() / 255.0
                         img_feat_var = eval_loader.dataset.cnn(
-                            Variable(img.view(1, 3, 224, 224).cuda())).view(
+                            Variable(img.view(1, 3, 224, 224).to(device))).view(
                                 1, 1, 3200)
 
                         episode_length = 0
@@ -418,10 +418,10 @@ def eval(rank, args, shared_model):
                                 2, 0, 1)).float() / 255.0
                             img_feat_var = eval_loader.dataset.cnn(
                                 Variable(img.view(1, 3, 224, 224)
-                                         .cuda())).view(1, 1, 3200)
+                                         .to(device))).view(1, 1, 3200)
 
                             action_in = torch.LongTensor(
-                                1, 1).fill_(action + 1).cuda()
+                                1, 1).fill_(action + 1).to(device)
 
                             dists_to_target.append(
                                 h3d.get_dist_to_target(h3d.env.cam.pos))
@@ -641,6 +641,9 @@ def eval(rank, args, shared_model):
                                 break
 
                             img, _, _ = h3d.step(action)
+                            if args.render:
+                                cv2.imshow('window', img)
+                                cv2.waitKey(100)
                             first_step = False
 
                         # compute stats
@@ -1173,7 +1176,7 @@ if __name__ == '__main__':
     parser.add_argument('-learning_rate', default=1e-3, type=float)
     parser.add_argument('-max_epochs', default=1000, type=int)
     parser.add_argument('-overfit', default=False, action='store_true')
-
+    parser.add_argument('-render', default=False, action='store_true')
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
