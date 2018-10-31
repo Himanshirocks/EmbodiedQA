@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 iters = []
 stat = []
 
-config = json.loads(open('10_30_04:12_pacman/train_1.json').read())
+config = json.loads(open('10_30_03:50_pacman/train_1.json').read())
 
 
 statistics = config['stats']
