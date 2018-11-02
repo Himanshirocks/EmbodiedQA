@@ -514,6 +514,10 @@ def eval(rank, args, shared_model):
                     metrics_slug = {}
 
                     h3d = eval_loader.dataset.episode_house
+                    print("Target Room Is: ")
+                    print(eval_loader.dataset.target_room)
+                    print("Target Object Is: ")
+                    print(eval_loader.dataset.target_obj)
 
                     # evaluate at multiple initializations
                     for i in [10, 30, 50]:
@@ -637,6 +641,7 @@ def eval(rank, args, shared_model):
                                 h3d.env.cam.pos.z, h3d.env.cam.yaw
                             ])
                             
+			    
                             if episode_done:
                                 break
 
@@ -1218,7 +1223,7 @@ if __name__ == '__main__':
     #    logging.info("CPU not supported")
     #    exit()
 
-    args.gpus = 0
+    args.gpus = [0]
 
     if args.checkpoint_path != False:
 

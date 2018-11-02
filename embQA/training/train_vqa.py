@@ -112,6 +112,8 @@ def eval(rank, args, shared_model):
                     images_var = Variable(images.cuda())
 
                     scores, att_probs = model(images_var, questions_var)
+                    print("Scores", scores)
+                    print("att_probs",att_probs)
                     loss = lossFn(scores, answers_var)
 
                     # update metrics
@@ -332,7 +334,7 @@ if __name__ == '__main__':
     parser.add_argument('-checkpoint_path', default=False)
     parser.add_argument('-checkpoint_dir', default='checkpoints/vqa/')
     parser.add_argument('-log_dir', default='logs/vqa/')
-    parser.add_argument('-to_log', default=0, type=int)
+    parser.add_argument('-to_log', default=1, type=int)
     parser.add_argument('-to_cache', default=True, type=bool)
     args = parser.parse_args()
 

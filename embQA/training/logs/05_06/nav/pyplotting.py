@@ -7,7 +7,7 @@ iters = []
 stat = []
 stat1 = []
 
-config = json.loads(open('10_31_05:29_pacman/train_1.json').read())
+config = json.loads(open('11_02_00:16_pacman/train_1.json').read())
 
 statistics = config['stats']
 print(len(statistics))
