@@ -135,7 +135,7 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                             1)
 
                         # forward through planner till spawn
-                        planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos = eval_loader.dataset.get_hierarchical_features_till_spawn(
+                        (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, controller_action_counter) = eval_loader.dataset.get_hierarchical_features_till_spawn(
                             actions[0, :action_length[0] + 1].numpy(), i)
 
                         planner_actions_in_var = Variable(
@@ -499,7 +499,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     planner_hidden = nav_model.planner_nav_rnn.init_hidden(1)
 
                     # forward through planner till spawn
-                    planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos = train_loader.dataset.get_hierarchical_features_till_spawn(
+                    (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, _ ) = train_loader.dataset.get_hierarchical_features_till_spawn(
                         actions[0, :action_length[0] + 1].numpy(),
                         max(3, int(mult * action_length[0])))
 
@@ -590,7 +590,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                                 planner_log_prob = F.log_softmax(
                                     planner_scores, dim=1)
 
-                                action = planner_prob.multinomial().data
+                                action = planner_prob.multinomial(num_samples=1).data
                                 planner_log_prob = planner_log_prob.gather(
                                     1, Variable(action))
 
@@ -634,7 +634,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             controller_log_prob = F.log_softmax(
                                 controller_scores, dim=1)
 
-                            controller_action = controller_prob.multinomial(
+                            controller_action = controller_prob.multinomial(num_samples=1
                             ).data
 
                             if int(controller_action[0]
@@ -757,7 +757,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='/path/to/target-obj-conn-maps/500')
+        default='data/target-obj-conn-maps/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(
@@ -782,7 +782,7 @@ if __name__ == '__main__':
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
-    parser.add_argument('-identifier', default='cnn')
+    parser.add_argument('-identifier', default='ques-image-eqa')
     parser.add_argument('-num_processes', default=1, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
 

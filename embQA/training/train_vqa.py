@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+#eval_loader.dataseti Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -112,8 +112,8 @@ def eval(rank, args, shared_model):
                     images_var = Variable(images.cuda())
 
                     scores, att_probs = model(images_var, questions_var)
-                    print("Scores", scores)
-                    print("att_probs",att_probs)
+                    #print("Scores", scores)
+                    #print("att_probs",att_probs)
                     loss = lossFn(scores, answers_var)
 
                     # update metrics

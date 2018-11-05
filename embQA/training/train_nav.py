@@ -1171,7 +1171,7 @@ if __name__ == '__main__':
     # model details
     parser.add_argument(
         '-model_type',
-        default='cnn',
+        default='pacman',
         choices=['cnn', 'cnn+q', 'lstm', 'lstm+q', 'lstm-mult+q', 'pacman'])
     parser.add_argument('-max_episode_length', default=100, type=int)
     parser.add_argument('-curriculum', default=0, type=int)
@@ -1185,8 +1185,8 @@ if __name__ == '__main__':
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
-    parser.add_argument('-save_every', default=1000, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
-    parser.add_argument('-identifier', default='cnn')
+    parser.add_argument('-save_every', default=5, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
+    parser.add_argument('-identifier', default='pacman')
     parser.add_argument('-num_processes', default=1, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
 
@@ -1194,7 +1194,7 @@ if __name__ == '__main__':
     parser.add_argument('-checkpoint_path', default=False)
     parser.add_argument('-checkpoint_dir', default='checkpoints/05_06/nav/')
     parser.add_argument('-log_dir', default='logs/05_06/nav/')
-    parser.add_argument('-to_log', default=0, type=int)
+    parser.add_argument('-to_log', default=1, type=int)
     parser.add_argument('-to_cache', action='store_true')
     parser.add_argument('-max_controller_actions', type=int, default=5)
     parser.add_argument('-max_actions', type=int)
