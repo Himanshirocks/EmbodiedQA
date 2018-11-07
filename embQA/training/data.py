@@ -640,13 +640,13 @@ class EqaDataset(Dataset):
             # when target_obj_conn_map_dir is defined (reinforce),
             # load entire shortest path navigation trajectory
             # and load connectivity map for intermediate rewards
-            if self.split in ['val', 'test'
-                              ] or self.target_obj_conn_map_dir != False:
+            if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
                 bbox_obj = [
                     x for x in self.boxes[index]
                     if x['type'] == 'object' and x['target'] == True
                 ][0]['box']
+
                 for obj_id in self.env_loaded[self.env_list[index]].objects:
                     box2 = self.env_loaded[self.env_list[index]].objects[
                         obj_id]['bbox']
@@ -654,12 +654,10 @@ class EqaDataset(Dataset):
                         all([bbox_obj['max'][x] == box2['max'][x] for x in range(3)]) == True:
                         target_obj_id = obj_id
                         break
-                bbox_room = [
-                    x for x in self.boxes[index]
-                    if x['type'] == 'room' and x['target'] == False
-                ][0]
-                for room in self.env_loaded[self.env_list[
-                        index]].env.house.all_rooms:
+
+                bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False ][0]
+
+                for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
                     if all([room['bbox']['min'][i] == bbox_room['box']['min'][i] for i in range(3)]) and \
                         all([room['bbox']['max'][i] == bbox_room['box']['max'][i] for i in range(3)]):
                         target_room = room
@@ -729,6 +727,7 @@ class EqaDataset(Dataset):
                 bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]['box']
                 for obj_id in self.env_loaded[self.env_list[index]].objects:
                     box2 = self.env_loaded[self.env_list[index]].objects[obj_id]['bbox']
+                    ############################ SATYEN ######################################
                     # print("BBOX_OBJ:", [bbox_obj['min'][x] for x in range(3)])
                     # print("BOX2 min:", [box2['min'][x] for x in range(3)])
                     # print("BBOX_OBJ:max", [bbox_obj['max'][x] for x in range(3)])
@@ -743,6 +742,8 @@ class EqaDataset(Dataset):
                     
                     if abs(diff_min + diff_max)/2 < min_:
                         min_ = (diff_min + diff_max)/2
+                        target_obj_id = obj_id
+                    elif min_ == 1:
                         target_obj_id = obj_id   
                     #if all([math.isclose(bbox_obj['min'][x], box2['min'][x], abs_tol = 0.6) for x in range(3)]) == True and \
                     #    all([math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol = 0.6) for x in range(3)]) == True:
@@ -750,9 +751,12 @@ class EqaDataset(Dataset):
                     #    target_obj_id = obj_id
                     #    break
 
+                    ############################################################################
+
                 bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False][0]
                 min_ = 1
                 for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
+                    ################ SATYEN ###############################################
                     # print("Room min", [room['bbox']['min'][x] for x in range(3)])
                     # print("BBox min", [bbox_room['box']['min'][x] for x in range(3)])
                     # print("Room max", [room['bbox']['max'][x] for x in range(3)])
@@ -765,27 +769,28 @@ class EqaDataset(Dataset):
                     diff_min = np.mean(room_min-bbox_room_min)
                     diff_max = np.mean(room_max - bbox_room_max)
                     
+                    
                     if abs(diff_min + diff_max)/2 < min_:
                         min_ = (diff_min + diff_max)/2
+                        target_room = room
+                    elif min_ == 1:
                         target_room = room
                     #if all([math.isclose(room['bbox']['min'][x], bbox_room['box']['min'][x], abs_tol = 0.6) for x in range(3)]) == True and \
                     #    all([math.isclose(room['bbox']['max'][x], bbox_room['box']['max'][x], abs_tol = 0.6) for x in range(3)]) == True:
                     #    target_room = room
                     #    break
                     
-
+                    #########################################################################
                 assert target_obj_id != False
                 assert target_room != False
                 self.env_loaded[self.env_list[index]].set_target_object(
-                    self.env_loaded[self.env_list[index]].objects[
-                        target_obj_id], target_room)
+                    self.env_loaded[self.env_list[index]].objects[target_obj_id], target_room)
 
                 # [NOTE] only works for batch size = 1
                 self.episode_pos_queue = self.pos_queue[index]
                 self.episode_house = self.env_loaded[self.env_list[index]]
                 self.target_room = target_room
-                self.target_obj = self.env_loaded[self.env_list[
-                    index]].objects[target_obj_id]
+                self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
 
                 return (idx, question, answer, actions, action_length)
 

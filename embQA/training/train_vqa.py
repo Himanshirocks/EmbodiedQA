@@ -9,7 +9,7 @@ import time
 import argparse
 import numpy as np
 import os, sys, json
-
+import pickle
 import torch
 from torch.autograd import Variable
 torch.backends.cudnn.enabled = False
@@ -25,7 +25,7 @@ from data import load_vocab
 import pdb
 
 
-def eval(rank, args, shared_model):
+def eval(rank, args, shared_model, checkpoint):
 
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
@@ -96,6 +96,7 @@ def eval(rank, args, shared_model):
             print(metrics.get_stat_string(mode=0))
 
         elif args.input_type == 'ques,image':
+            count=0
             done = False
             all_envs_loaded = eval_loader.dataset._check_if_all_envs_loaded()
 
@@ -106,19 +107,39 @@ def eval(rank, args, shared_model):
                     model.cuda()
 
                     idx, questions, answers, images, _, _, _ = batch
-
+                    print("Count ", count, " Epoch ", epoch)
+                    print("Questions", questions)
+                    print("answers", answers)
+                    #print("Images", images.size())
+                    #print(type(images))
                     questions_var = Variable(questions.cuda())
                     answers_var = Variable(answers.cuda())
                     images_var = Variable(images.cuda())
-
+                    images_numpy = images_var.data.cpu().numpy()
+                    question_numpy = questions_var.data.cpu().numpy()
+                    answers_numpy = answers_var.data.cpu().numpy()
                     scores, att_probs = model(images_var, questions_var)
-                    #print("Scores", scores)
-                    #print("att_probs",att_probs)
+                    print("Scores", scores)
+                    print("att_probs",att_probs)
+                    scores_numpy = scores.data.cpu().numpy()
+                    att_probs_numpy = att_probs.data.cpu().numpy()
                     loss = lossFn(scores, answers_var)
 
                     # update metrics
                     accuracy, ranks = metrics.compute_ranks(
                         scores.data.cpu(), answers)
+                    print("Accuracy", accuracy)
+                    filename = "pkl_dumps/out_"+str(count)+"_"+str(epoch)+"_"+str(accuracy)+".pkl";
+                    file = open(filename, 'wb')
+                    pickle.dump(images_numpy, file)
+                    pickle.dump(question_numpy, file)
+                    pickle.dump(answers_numpy, file)
+                    pickle.dump(scores_numpy, file)
+                    pickle.dump(att_probs_numpy, file)
+                    pickle.dump(accuracy, file)
+                    file.close()
+          
+                    count=count+1
                     metrics.update(
                         [loss.data[0], accuracy, ranks, 1.0 / ranks])
 
@@ -260,7 +281,8 @@ def train(rank, args, shared_model):
                     model.cuda()
 
                     idx, questions, answers, images, _, _, _ = batch
-
+                    #print("Questions", questions)
+                    #print("answers", answers)
                     questions_var = Variable(questions.cuda())
                     answers_var = Variable(answers.cuda())
                     images_var = Variable(images.cuda())
@@ -273,6 +295,7 @@ def train(rank, args, shared_model):
 
                     # update metrics
                     accuracy, ranks = metrics.compute_ranks(scores.data.cpu(), answers)
+                    #print("Accuracy", accuracy)
                     metrics.update([loss.data[0], accuracy, ranks, 1.0 / ranks])
 
                     # backprop and update
@@ -389,7 +412,7 @@ if __name__ == '__main__':
 
     if args.mode == 'eval':
 
-        eval(0, args, shared_model)
+        eval(0, args, shared_model, checkpoint)
 
     else:
 

@@ -514,10 +514,10 @@ def eval(rank, args, shared_model):
                     metrics_slug = {}
 
                     h3d = eval_loader.dataset.episode_house
-                    print("Target Room Is: ")
-                    print(eval_loader.dataset.target_room)
-                    print("Target Object Is: ")
-                    print(eval_loader.dataset.target_obj)
+                    # print("Target Room Is: ")
+                    # print(eval_loader.dataset.target_room)
+                    # print("Target Object Is: ")
+                    # print(eval_loader.dataset.target_obj)
 
                     # evaluate at multiple initializations
                     for i in [10, 30, 50]:
@@ -646,10 +646,17 @@ def eval(rank, args, shared_model):
                                 break
 
                             img, _, _ = h3d.step(action)
+                            # img2 = Image.fromarray(img, 'RGB')
                             if args.render:
-                                cv2.imshow('window', img)
-                                cv2.waitKey(100)
+                                fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                                video = cv2.VideoWriter('video1.avi', fourcc, 5, (224, 224))
+                                # img2.show()
+                                # cv2.imshow('window', img)
+                                # cv2.waitKey(100)
+                                video.write(img)
                             first_step = False
+
+                            video.release()
 
                         # compute stats
                         metrics_slug['d_0_' + str(i)] = dists_to_target[0]
@@ -730,7 +737,7 @@ def eval(rank, args, shared_model):
                 torch.save(checkpoint, checkpoint_path)
 
         print('[best_eval_d_D_50:%.04f]' % best_eval_acc)
-        logging.info("EVAL: [best_eval_d_D_50:{.04f}]".format(best_eval_acc))
+        logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
 
         eval_loader.dataset._load_envs(start_idx=0, in_order=True)
 
@@ -831,7 +838,6 @@ def train(rank, args, shared_model):
     t, epoch = 0, 0
 
     while epoch < int(args.max_epochs):
-
         if 'cnn' in args.model_type:
 
             done = False

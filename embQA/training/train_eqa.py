@@ -67,7 +67,10 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
 
     t, epoch, best_eval_acc = 0, 0, 0.0
 
-    while epoch < int(args.max_epochs):
+    while epoch < int(args.max_epochs): #Himi changes
+        print('###############################')
+        print('[eval] Epoch is:', epoch)
+        print('###############################')
 
         start_time = time.time()
         invalids = []
@@ -103,7 +106,7 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
             log_json=args.output_ans_log_path)
 
         if 'pacman' in args.model_type:
-
+            print('[eval] In If Pacman Condition')
             done = False
 
             while done == False:
@@ -366,6 +369,25 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
 
         epoch += 1
 
+        # checkpoints always #Himi changes
+        if epoch % args.eval_every == 0 and args.to_log == 1:
+            vqa_metrics.dump_log()
+            nav_metrics.dump_log()
+
+            model_state = get_state(nav_model)
+
+            aad = dict(args.__dict__)
+            ad = {}
+            for i in aad:
+                if i[0] != '_':
+                    ad[i] = aad[i]
+
+            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+            checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+                args.checkpoint_dir, epoch, best_eval_acc)
+            print('Saving checkpoint to %s' % checkpoint_path)
+            torch.save(checkpoint, checkpoint_path) 
         # checkpoint if best val accuracy
         if vqa_metrics.metrics[2][0] > best_eval_acc:  # ans_acc_50
             best_eval_acc = vqa_metrics.metrics[2][0]
@@ -467,6 +489,10 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
     while epoch < int(args.max_epochs):
 
+        print('###############################')
+        print('[train] Epoch is:', epoch)
+        print('###############################')
+
         if 'pacman' in args.model_type:
 
             planner_lossFn = MaskedNLLCriterion().cuda()
@@ -475,7 +501,12 @@ def train(rank, args, shared_nav_model, shared_ans_model):
             done = False
             all_envs_loaded = train_loader.dataset._check_if_all_envs_loaded()
 
+            #himi changes
+            envs = 0
+
             while done == False:
+
+                envs += 1
 
                 for batch in train_loader:
 
@@ -733,6 +764,27 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                         p_losses, c_losses, reward_list, episode_length_list = [], [], [], []
 
+                #Himi changes, checking every 100 
+                if args.to_log == 1 and envs % 10 == 0 :
+                    vqa_metrics.dump_log()
+                    nav_metrics.dump_log()
+
+                    model_state = get_state(nav_model)
+
+                    aad = dict(args.__dict__)
+                    ad = {}
+                    for i in aad:
+                        if i[0] != '_':
+                            ad[i] = aad[i]
+
+                    checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+                    checkpoint_path = 'preliminary_%s/epoch_%d_ans_10.pt' % (
+                        args.checkpoint_dir, epoch)
+                    print('Saving checkpoint to %s' % checkpoint_path)
+                    torch.save(checkpoint, checkpoint_path)
+                ##################################
+
                 if all_envs_loaded == False:
                     train_loader.dataset._load_envs(in_order=True)
                     if len(train_loader.dataset.pruned_env_set) == 0:
@@ -744,6 +796,25 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     done = True
 
         epoch += 1
+        #Himi changes
+        if epoch % args.save_every == 0 and args.to_log == 1:
+            vqa_metrics.dump_log()
+            nav_metrics.dump_log()
+
+            model_state = get_state(nav_model)
+
+            aad = dict(args.__dict__)
+            ad = {}
+            for i in aad:
+                if i[0] != '_':
+                    ad[i] = aad[i]
+
+            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+            checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+                args.checkpoint_dir, epoch, best_eval_acc)
+            print('Saving checkpoint to %s' % checkpoint_path)
+            torch.save(checkpoint, checkpoint_path)
 
 
 if __name__ == '__main__':
@@ -781,7 +852,7 @@ if __name__ == '__main__':
 
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
-    parser.add_argument('-eval_every', default=1, type=int)
+    parser.add_argument('-eval_every', default=5, type=int)
     parser.add_argument('-identifier', default='ques-image-eqa')
     parser.add_argument('-num_processes', default=1, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
@@ -792,7 +863,7 @@ if __name__ == '__main__':
 
     parser.add_argument('-checkpoint_dir', default='checkpoints/eqa/')
     parser.add_argument('-log_dir', default='logs/eqa/')
-    parser.add_argument('-to_log', default=0, type=int)
+    parser.add_argument('-to_log', default=1, type=int)
     parser.add_argument('-to_cache', action='store_true')
     args = parser.parse_args()
 
