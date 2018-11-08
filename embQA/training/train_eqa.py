@@ -128,8 +128,8 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                     #Sai analysis
                     # pdb.set_trace()
                     if 364909 in idx:
-                        pass
-                        #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                        #pass
+                        question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
                     else:
                         sys.exit(1)
                     ##########

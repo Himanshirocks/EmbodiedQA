@@ -143,6 +143,15 @@ def eval(rank, args, shared_model):
                     model.to(device)
 
                     idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
+                    ##########
+                    #Sai analysis
+                    # pdb.set_trace()
+                    if 364909 in idx:
+                        #pass
+                        question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                    else:
+                        sys.exit(1)
+                    ##########
                     metrics_slug = {}
 
                     # evaluate at multiple initializations
