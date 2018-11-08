@@ -488,7 +488,6 @@ def eval(rank, args, shared_model):
                     done = True
 
         elif 'pacman' in args.model_type:
-
             done = False
 
             while done == False:
@@ -513,6 +512,11 @@ def eval(rank, args, shared_model):
                     idx, question, answer, actions, action_length = batch
                     metrics_slug = {}
 
+                    print('Question is ', question)
+                    print('answer is ', answer)
+
+                    answeris = answer.item()
+
                     h3d = eval_loader.dataset.episode_house
                     # print("Target Room Is: ")
                     # print(eval_loader.dataset.target_room)
@@ -520,7 +524,15 @@ def eval(rank, args, shared_model):
                     # print(eval_loader.dataset.target_obj)
 
                     # evaluate at multiple initializations
+                    video_dir = '../video/nav'
+                    video_dir = os.path.join(video_dir,
+                                                       args.time_id + '_' + args.identifier)
                     for i in [10, 30, 50]:
+                        #Satyen suggests Himi changes ----> works
+                        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                        time_now = time.strftime("%m_%d_%H:%M")
+                        video_name = '%s_video_%d_%d.avi' %(time_now, i, answeris)
+                        video = cv2.VideoWriter(video_name, fourcc, 5, (224, 224))
 
                         t += 1
 
@@ -648,16 +660,15 @@ def eval(rank, args, shared_model):
                             img, _, _ = h3d.step(action)
                             # img2 = Image.fromarray(img, 'RGB')
                             if args.render:
-                                fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                                video = cv2.VideoWriter('video1.avi', fourcc, 5, (224, 224))
                                 # img2.show()
                                 # cv2.imshow('window', img)
                                 # cv2.waitKey(100)
                                 video.write(img)
                             first_step = False
 
-                            video.release()
+                            
 
+                        video.release()
                         # compute stats
                         metrics_slug['d_0_' + str(i)] = dists_to_target[0]
                         metrics_slug['d_T_' + str(i)] = dists_to_target[-1]

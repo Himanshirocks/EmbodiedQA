@@ -733,7 +733,9 @@ class House3DUtils():
             )  # find all the open components
             if len(curr_components) == 0:
                 print('No space found! =(')
-                raise ValueError('no space')
+                print('Found Target') #Himi changes #Target too close
+                return True
+                #raise ValueError('no space')
             if isinstance(curr_components[0],
                           list):  # join all the coors in the open components
                 curr_major_coors = list(itertools.chain(*curr_components))
@@ -811,7 +813,7 @@ class House3DUtils():
                 self.env.house.house['id'] + '_' + object_tp + '.npy'),
             connMap)
         self.connectedCoors = que
-        print(' >>>> ConnMap Cached!')
+        #print(' >>>> ConnMap Cached!')
         return True  # room changed!
 
     def _load_semantic_classes(self, color_file=None):

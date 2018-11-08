@@ -10,6 +10,7 @@ import argparse
 import numpy as np
 import os, sys, json
 from tqdm import tqdm
+import pdb
 
 import torch
 import torch.nn.functional as F
@@ -119,9 +120,20 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
 
                     idx, question, answer, actions, action_length = batch
                     metrics_slug = {}
-
+                    # print('question is: ', question)
+                    # print('answer is: ', answer)
                     h3d = eval_loader.dataset.episode_house
-
+                    
+                    ##########
+                    #Sai analysis
+                    # pdb.set_trace()
+                    if 364909 in idx:
+                        pass
+                        #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                    else:
+                        sys.exit(1)
+                    ##########
+                    
                     # evaluate at multiple initializations
                     for i in [10, 30, 50]:
 
@@ -291,15 +303,16 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                             scores.data.cpu(), answer)
 
                         pred_answer = scores.max(1)[1].data[0]
-
-                        print('[Q_GT]', ' '.join([
-                            eval_loader.dataset.vocab['questionIdxToToken'][x]
-                            for x in question[0] if x != 0
-                        ]))
-                        print('[A_GT]', eval_loader.dataset.vocab[
-                            'answerIdxToToken'][answer[0]])
-                        print('[A_PRED]', eval_loader.dataset.vocab[
-                            'answerIdxToToken'][pred_answer])
+                        #Himi changes for the awful keyerror
+                        questionIdToToken = eval_loader.dataset.vocab['questionIdxToToken']
+                        print('[Q_GT]', ' '.join([eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question[0] if x != 0]))
+                        print('[A_GT]', ' '.join([eval_loader.dataset.vocab['answerIdxToToken'][answer[0].item()]]))
+                        print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
+                        #Himi 
+                        print('Acc is: ', ans_acc)
+                        print('Mean Rank Is: ', ans_rank)
+                        # print(pred_answer)
+                        # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
 
                         # compute stats
                         metrics_slug['accuracy_' + str(i)] = ans_acc[0]
@@ -502,11 +515,9 @@ def train(rank, args, shared_nav_model, shared_ans_model):
             all_envs_loaded = train_loader.dataset._check_if_all_envs_loaded()
 
             #himi changes
-            envs = 0
+            envs = 1
 
             while done == False:
-
-                envs += 1
 
                 for batch in train_loader:
 
@@ -754,8 +765,32 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             p_losses, c_losses, reward_list,
                             episode_length_list
                         ])
+                        envs+=1
+                        print('[train train_eqa.py] Envs is: ', envs)                      
+
 
                         print(nav_metrics.get_stat_string())
+
+
+                        if args.to_log == 1 and envs % 10 == 0 :
+                            vqa_metrics.dump_log()
+                            nav_metrics.dump_log()
+
+                            model_state = get_state(nav_model)
+
+                            aad = dict(args.__dict__)
+                            ad = {}
+                            for i in aad:
+                                if i[0] != '_':
+                                    ad[i] = aad[i]
+
+                            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+                            checkpoint_path = '%s/epoch_%d_ans_10_envs_%d.pt' % (
+                                args.checkpoint_dir, epoch, envs)
+                            print('Saving checkpoint to %s' % checkpoint_path)
+                            torch.save(checkpoint, checkpoint_path)
+                        ##################################
                         if args.to_log == 1:
                             nav_metrics.dump_log()
 
@@ -764,26 +799,27 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                         p_losses, c_losses, reward_list, episode_length_list = [], [], [], []
 
-                #Himi changes, checking every 100 
-                if args.to_log == 1 and envs % 10 == 0 :
-                    vqa_metrics.dump_log()
-                    nav_metrics.dump_log()
+                #Himi changes, checking every 100
+                print('Out of that loop') 
+                # if args.to_log == 1 and envs % 2 == 0 :
+                #     vqa_metrics.dump_log()
+                #     nav_metrics.dump_log()
 
-                    model_state = get_state(nav_model)
+                #     model_state = get_state(nav_model)
 
-                    aad = dict(args.__dict__)
-                    ad = {}
-                    for i in aad:
-                        if i[0] != '_':
-                            ad[i] = aad[i]
+                #     aad = dict(args.__dict__)
+                #     ad = {}
+                #     for i in aad:
+                #         if i[0] != '_':
+                #             ad[i] = aad[i]
 
-                    checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+                #     checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
 
-                    checkpoint_path = 'preliminary_%s/epoch_%d_ans_10.pt' % (
-                        args.checkpoint_dir, epoch)
-                    print('Saving checkpoint to %s' % checkpoint_path)
-                    torch.save(checkpoint, checkpoint_path)
-                ##################################
+                #     checkpoint_path = '%s/epoch_%d_ans_10_envs_%d.pt' % (
+                #         args.checkpoint_dir, epoch, envs)
+                #     print('Saving checkpoint to %s' % checkpoint_path)
+                #     torch.save(checkpoint, checkpoint_path)
+                # ##################################
 
                 if all_envs_loaded == False:
                     train_loader.dataset._load_envs(in_order=True)
@@ -848,7 +884,7 @@ if __name__ == '__main__':
     # optim params
     parser.add_argument('-batch_size', default=20, type=int)
     parser.add_argument('-learning_rate', default=1e-5, type=float)
-    parser.add_argument('-max_epochs', default=1000, type=int)
+    parser.add_argument('-max_epochs', default=500, type=int)
 
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)

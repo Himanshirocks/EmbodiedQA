@@ -682,13 +682,13 @@ class House3DUtils():
 
     # analogous to `setTargetRoom` in the House3D API
     def set_target_object(self, obj, room):
-        object_tp = room['id'] + '_' + obj['id'] + '_' + obj['fine_class'].lower(
-        )
+        object_tp = room['id'] + '_' + obj['id'] + '_' + obj['fine_class'].lower()
+        
         # Caching
         if object_tp in self.env.house.connMapDict:
-            self.env.house.connMap, self.env.house.connectedCoors, self.env.house.inroomDist, self.env.house.maxConnDist = self.env.house.connMapDict[
-                object_tp]
+            self.env.house.connMap, self.env.house.connectedCoors, self.env.house.inroomDist, self.env.house.maxConnDist = self.env.house.connMapDict[object_tp]
             return True  # object changed!
+
         elif os.path.exists(
                 os.path.join(
                     self.target_obj_conn_map_dir,
@@ -705,9 +705,11 @@ class House3DUtils():
         self.env.house.connMap = connMap = np.ones(
             (self.env.house.n_row + 1, self.env.house.n_row + 1),
             dtype=np.int32) * -1
+
         self.env.house.inroomDist = inroomDist = np.ones(
             (self.env.house.n_row + 1, self.env.house.n_row + 1),
             dtype=np.float32) * -1
+
         dirs = [[0, 1], [1, 0], [-1, 0], [0, -1]]
         que = []
         flag_find_open_components = True
@@ -731,9 +733,12 @@ class House3DUtils():
                 dirs=dirs,
                 return_open=flag_find_open_components
             )  # find all the open components
+
             if len(curr_components) == 0:
                 print('No space found! =(')
-                raise ValueError('no space')
+                print('Too close to target obj') #Himi changes
+                return True
+                #raise ValueError('no space')
             if isinstance(curr_components[0],
                           list):  # join all the coors in the open components
                 curr_major_coors = list(itertools.chain(*curr_components))
