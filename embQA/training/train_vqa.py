@@ -61,7 +61,7 @@ def eval(rank, args, shared_model, checkpoint):
                                         'eval_' + str(rank) + '.json')
 
     t, epoch, best_eval_acc = 0, 0, 0
-
+    mean_rank = []
     while epoch < int(args.max_epochs):
 
         model.load_state_dict(shared_model.state_dict())
@@ -101,15 +101,16 @@ def eval(rank, args, shared_model, checkpoint):
             all_envs_loaded = eval_loader.dataset._check_if_all_envs_loaded()
 
             while done == False:
+                mean_rank = []
                 for batch in eval_loader:
                     t += 1
 
                     model.cuda()
 
                     idx, questions, answers, images, _, _, _ = batch
-                    print("Count ", count, " Epoch ", epoch)
-                    print("Questions", questions)
-                    print("answers", answers)
+                    #print("Count ", count, " Epoch ", epoch)
+                    #print("Questions", questions)
+                    #print("answers", answers)
                     #print("Images", images.size())
                     #print(type(images))
                     questions_var = Variable(questions.cuda())
@@ -119,8 +120,8 @@ def eval(rank, args, shared_model, checkpoint):
                     question_numpy = questions_var.data.cpu().numpy()
                     answers_numpy = answers_var.data.cpu().numpy()
                     scores, att_probs = model(images_var, questions_var)
-                    print("Scores", scores)
-                    print("att_probs",att_probs)
+                    #print("Scores", scores)
+                    #print("att_probs",att_probs)
                     scores_numpy = scores.data.cpu().numpy()
                     att_probs_numpy = att_probs.data.cpu().numpy()
                     loss = lossFn(scores, answers_var)
@@ -128,23 +129,25 @@ def eval(rank, args, shared_model, checkpoint):
                     # update metrics
                     accuracy, ranks = metrics.compute_ranks(
                         scores.data.cpu(), answers)
-                    print("Accuracy", accuracy)
-                    filename = "pkl_dumps/out_"+str(count)+"_"+str(epoch)+"_"+str(accuracy)+".pkl";
-                    file = open(filename, 'wb')
-                    pickle.dump(images_numpy, file)
-                    pickle.dump(question_numpy, file)
-                    pickle.dump(answers_numpy, file)
-                    pickle.dump(scores_numpy, file)
-                    pickle.dump(att_probs_numpy, file)
-                    pickle.dump(accuracy, file)
-                    file.close()
+                    #print("Accuracy", accuracy)
+                    mean_rank.extend(ranks)
+                    print("Batch Mean Ranks", sum(ranks)/len(ranks))
+                    #filename = "pkl_dumps/out_"+str(count)+"_"+str(epoch)+"_"+str(accuracy)+".pkl";
+                    #file = open(filename, 'wb')
+                    #pickle.dump(images_numpy, file)
+                    #pickle.dump(question_numpy, file)
+                    #pickle.dump(answers_numpy, file)
+                    #pickle.dump(scores_numpy, file)
+                    #pickle.dump(att_probs_numpy, file)
+                    #pickle.dump(accuracy, file)
+                    #file.close()
           
                     count=count+1
                     metrics.update(
                         [loss.data[0], accuracy, ranks, 1.0 / ranks])
 
                 print(metrics.get_stat_string(mode=0))
-
+                print("Mean Rank for eval",sum(mean_rank)/len(mean_rank))
                 if all_envs_loaded == False:
                     eval_loader.dataset._load_envs()
                     if len(eval_loader.dataset.pruned_env_set) == 0:
@@ -175,7 +178,8 @@ def eval(rank, args, shared_model, checkpoint):
                 torch.save(checkpoint, checkpoint_path)
 
         print('[best_eval_accuracy:%.04f]' % best_eval_acc)
-
+        break
+    print("Mean Rank for eval",sum(mean_rank)/len(mean_rank)) 
 
 def train(rank, args, shared_model):
 
@@ -349,7 +353,7 @@ if __name__ == '__main__':
     # bookkeeping
     parser.add_argument('-print_every', default=50, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
-    parser.add_argument('-identifier', default='q-only')
+    parser.add_argument('-identifier', default='ques-image')
     parser.add_argument('-num_processes', default=1, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
 
@@ -393,6 +397,7 @@ if __name__ == '__main__':
     if not os.path.exists(args.checkpoint_dir) and args.to_log == 1:
         os.makedirs(args.checkpoint_dir)
         os.makedirs(args.log_dir)
+        print("made dirs######################################33")
 
     if args.input_type == 'ques':
 

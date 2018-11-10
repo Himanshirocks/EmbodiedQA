@@ -292,7 +292,7 @@ class EqaDataset(Dataset):
         return pruned_env_set
 
     def _load_envs(self, start_idx=-1, in_order=False):
-        #self._clear_memory()
+        self._clear_memory()
         if start_idx == -1:
             start_idx = self.env_set.index(self.pruned_env_set[-1]) + 1
 

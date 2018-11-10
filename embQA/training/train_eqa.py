@@ -26,6 +26,7 @@ from models import MaskedNLLCriterion
 
 from models import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab, flat_to_hierarchical_actions
+import cv2
 
 def eval(rank, args, shared_nav_model, shared_ans_model):
 
@@ -127,11 +128,15 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                     ##########
                     #Sai analysis
                     # pdb.set_trace()
+                    #print("Question idx ",idx)
                     if 364909 in idx:
-                        #pass
-                        question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                        pass
+                        #print("Question changed")
+                        #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
                     else:
-                        sys.exit(1)
+                        print("Question idx ",idx)
+                        #print("not the selected question")
+                        #sys.exit(1)
                     ##########
                     
                     # evaluate at multiple initializations
@@ -295,6 +300,14 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                                 pos_queue) - 5:] + pos_queue
                         images = eval_loader.dataset.get_frames(
                             h3d, pos_queue[-5:], preprocess=True)
+
+                        print((images.shape))
+
+                        for i, img in enumerate(images):
+                            img = np.transpose(img, axes=(2,1,0))
+                            cv2.imwrite('image_{}.png'.format(i),img)
+
+
                         images_var = Variable(
                             torch.from_numpy(images).cuda()).view(
                                 1, 5, 3, 224, 224)
@@ -310,6 +323,8 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                         print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
                         #Himi 
                         print('Acc is: ', ans_acc)
+                        if 1 in ans_acc:
+                            print("ACCURACY 1")
                         print('Mean Rank Is: ', ans_rank)
                         # print(pred_answer)
                         # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
@@ -833,24 +848,24 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
         epoch += 1
         #Himi changes
-        if epoch % args.save_every == 0 and args.to_log == 1:
-            vqa_metrics.dump_log()
-            nav_metrics.dump_log()
+        # if epoch % args.save_every == 0 and args.to_log == 1:
+        #     vqa_metrics.dump_log()
+        #     nav_metrics.dump_log()
 
-            model_state = get_state(nav_model)
+        #     model_state = get_state(nav_model)
 
-            aad = dict(args.__dict__)
-            ad = {}
-            for i in aad:
-                if i[0] != '_':
-                    ad[i] = aad[i]
+        #     aad = dict(args.__dict__)
+        #     ad = {}
+        #     for i in aad:
+        #         if i[0] != '_':
+        #             ad[i] = aad[i]
 
-            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+        #     checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
 
-            checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
-                args.checkpoint_dir, epoch, best_eval_acc)
-            print('Saving checkpoint to %s' % checkpoint_path)
-            torch.save(checkpoint, checkpoint_path)
+        #     checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+        #         args.checkpoint_dir, epoch, best_eval_acc)
+        #     print('Saving checkpoint to %s' % checkpoint_path)
+        #     torch.save(checkpoint, checkpoint_path)
 
 
 if __name__ == '__main__':

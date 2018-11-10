@@ -95,7 +95,7 @@ class VqaMetric(Metric):
             ranks[i] = scores[i].gt(scores[i][labels[i]]).sum() + 1
             if ranks[i] == 1:
                 accuracy[i] = 1
-
+        #mrr = (1/len(ranks))*sum([1/i for i in ranks])
         return accuracy, ranks
 
 class NavMetric(Metric):
