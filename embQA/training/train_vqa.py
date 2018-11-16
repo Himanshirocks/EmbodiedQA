@@ -25,7 +25,8 @@ from data import load_vocab
 import pdb
 
 
-def eval(rank, args, shared_model, checkpoint):
+def eval(rank, args, shared_model, best_eval_acc=0,  checkpoint=None, epoch = 0):
+    print('Evaluating at {} epoch, with Acc {} ##################'.format(epoch, best_eval_acc))
 
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
@@ -57,129 +58,112 @@ def eval(rank, args, shared_model, checkpoint):
     eval_loader = EqaDataLoader(**eval_loader_kwargs)
     print('eval_loader has %d samples' % len(eval_loader.dataset))
 
-    args.output_log_path = os.path.join(args.log_dir,
-                                        'eval_' + str(rank) + '.json')
+    args.output_log_path = os.path.join(args.log_dir, 'eval_' + str(rank) + '.json')
 
-    t, epoch, best_eval_acc = 0, 0, 0
+    # t, best_eval_acc = 0, 0, 0
+    t = 0
     mean_rank = []
-    while epoch < int(args.max_epochs):
 
-        model.load_state_dict(shared_model.state_dict())
-        model.eval()
+    model.load_state_dict(shared_model.state_dict())
+    model.eval()
 
-        metrics = VqaMetric(
-            info={'split': args.eval_split},
-            metric_names=[
-                'loss', 'accuracy', 'mean_rank', 'mean_reciprocal_rank'
-            ],
-            log_json=args.output_log_path)
+    metrics = VqaMetric(
+        info={'split': args.eval_split},
+        metric_names=[
+            'loss', 'accuracy', 'mean_rank', 'mean_reciprocal_rank'
+        ],
+        log_json=args.output_log_path)
 
-        if args.input_type == 'ques':
-            for batch in eval_loader:
+    if args.input_type == 'ques':
+        for batch in eval_loader:
+            t += 1
+
+            model.cuda()
+
+            idx, questions, answers = batch
+
+            questions_var = Variable(questions.cuda())
+            answers_var = Variable(answers.cuda())
+
+            scores = model(questions_var)
+            loss = lossFn(scores, answers_var)
+
+            # update metrics
+            accuracy, ranks = metrics.compute_ranks(
+                scores.data.cpu(), answers)
+            metrics.update([loss.data[0], accuracy, ranks, 1.0 / ranks])
+
+        print(metrics.get_stat_string(mode=0))
+
+    elif args.input_type == 'ques,image':
+        done = False
+        all_envs_loaded = eval_loader.dataset._check_if_all_envs_loaded()
+
+        while done == False:
+            mean_rank = []
+            for num, batch in enumerate(eval_loader):
+                # if num>0:
+                #     done= True
+                #     break
+
                 t += 1
 
                 model.cuda()
 
-                idx, questions, answers = batch
-
+                idx, questions, answers, images, _, _, _ = batch
                 questions_var = Variable(questions.cuda())
                 answers_var = Variable(answers.cuda())
-
-                scores = model(questions_var)
+                images_var = Variable(images.cuda())
+                images_numpy = images_var.data.cpu().numpy()
+                question_numpy = questions_var.data.cpu().numpy()
+                answers_numpy = answers_var.data.cpu().numpy()
+                scores, att_probs = model(images_var, questions_var)
+                scores_numpy = scores.data.cpu().numpy()
+                att_probs_numpy = att_probs.data.cpu().numpy()
                 loss = lossFn(scores, answers_var)
 
                 # update metrics
                 accuracy, ranks = metrics.compute_ranks(
                     scores.data.cpu(), answers)
-                metrics.update([loss.data[0], accuracy, ranks, 1.0 / ranks])
+                mean_rank.extend(ranks)
+                print("Batch Mean Ranks", sum(ranks)/len(ranks))
+      
+                metrics.update([loss.item(), accuracy, ranks, 1.0 / ranks])
 
             print(metrics.get_stat_string(mode=0))
-
-        elif args.input_type == 'ques,image':
-            count=0
-            done = False
-            all_envs_loaded = eval_loader.dataset._check_if_all_envs_loaded()
-
-            while done == False:
-                mean_rank = []
-                for batch in eval_loader:
-                    t += 1
-
-                    model.cuda()
-
-                    idx, questions, answers, images, _, _, _ = batch
-                    #print("Count ", count, " Epoch ", epoch)
-                    #print("Questions", questions)
-                    #print("answers", answers)
-                    #print("Images", images.size())
-                    #print(type(images))
-                    questions_var = Variable(questions.cuda())
-                    answers_var = Variable(answers.cuda())
-                    images_var = Variable(images.cuda())
-                    images_numpy = images_var.data.cpu().numpy()
-                    question_numpy = questions_var.data.cpu().numpy()
-                    answers_numpy = answers_var.data.cpu().numpy()
-                    scores, att_probs = model(images_var, questions_var)
-                    #print("Scores", scores)
-                    #print("att_probs",att_probs)
-                    scores_numpy = scores.data.cpu().numpy()
-                    att_probs_numpy = att_probs.data.cpu().numpy()
-                    loss = lossFn(scores, answers_var)
-
-                    # update metrics
-                    accuracy, ranks = metrics.compute_ranks(
-                        scores.data.cpu(), answers)
-                    #print("Accuracy", accuracy)
-                    mean_rank.extend(ranks)
-                    print("Batch Mean Ranks", sum(ranks)/len(ranks))
-                    #filename = "pkl_dumps/out_"+str(count)+"_"+str(epoch)+"_"+str(accuracy)+".pkl";
-                    #file = open(filename, 'wb')
-                    #pickle.dump(images_numpy, file)
-                    #pickle.dump(question_numpy, file)
-                    #pickle.dump(answers_numpy, file)
-                    #pickle.dump(scores_numpy, file)
-                    #pickle.dump(att_probs_numpy, file)
-                    #pickle.dump(accuracy, file)
-                    #file.close()
-          
-                    count=count+1
-                    metrics.update(
-                        [loss.data[0], accuracy, ranks, 1.0 / ranks])
-
-                print(metrics.get_stat_string(mode=0))
-                print("Mean Rank for eval",sum(mean_rank)/len(mean_rank))
-                if all_envs_loaded == False:
-                    eval_loader.dataset._load_envs()
-                    if len(eval_loader.dataset.pruned_env_set) == 0:
-                        done = True
-                else:
+            print("Mean Rank for eval",sum(mean_rank)/len(mean_rank))
+            if all_envs_loaded == False:
+                eval_loader.dataset._load_envs()
+                if len(eval_loader.dataset.pruned_env_set) == 0:
                     done = True
-
-        epoch += 1
+            else:
+                done = True
 
         # checkpoint if best val accuracy
-        if metrics.metrics[1][0] > best_eval_acc:
+        if metrics.metrics[1][0] >= best_eval_acc:
             best_eval_acc = metrics.metrics[1][0]
-            if epoch % args.eval_every == 0 and args.to_log == 1:
-                metrics.dump_log()
+            
+            metrics.dump_log()
 
-                model_state = get_state(model)
+            model_state = get_state(model)
 
-                if args.checkpoint_path != False:
-                    ad = checkpoint['args']
-                else:
-                    ad = args.__dict__
+            if args.checkpoint_path != False and checkpoint is not None:
+                ad = checkpoint['args']
+            else:
+                ad = args.__dict__
 
-                checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
 
-                checkpoint_path = '%s/epoch_%d_accuracy_%.04f.pt' % (
-                    args.checkpoint_dir, epoch, best_eval_acc)
-                print('Saving checkpoint to %s' % checkpoint_path)
-                torch.save(checkpoint, checkpoint_path)
+            checkpoint_path = '%s/epoch_%d_accuracy_%d.pt' % (
+                args.checkpoint_dir, epoch, int(best_eval_acc*100))
+
+            print('Saving checkpoint to %s' % checkpoint_path)
+            torch.save(checkpoint, checkpoint_path)
 
         print('[best_eval_accuracy:%.04f]' % best_eval_acc)
-        break
-    print("Mean Rank for eval",sum(mean_rank)/len(mean_rank)) 
+
+    print("Mean Rank for eval",sum(mean_rank)/len(mean_rank))
+    return best_eval_acc 
 
 def train(rank, args, shared_model):
 
@@ -214,22 +198,48 @@ def train(rank, args, shared_model):
         'to_cache': args.to_cache
     }
 
+    eval_loader_kwargs = {
+        'questions_h5': args.val_h5,
+        'data_json': args.data_json,
+        'vocab': args.vocab_json,
+        'batch_size': 1,
+        'input_type': args.input_type,
+        'num_frames': args.num_frames,
+        'split': 'val',
+        'max_threads_per_gpu': args.max_threads_per_gpu,
+        'gpu_id': args.gpus[rank%len(args.gpus)],
+        'to_cache': args.to_cache
+    }
+
     args.output_log_path = os.path.join(args.log_dir,
                                         'train_' + str(rank) + '.json')
-
+    eval_output_log_path = os.path.join(args.log_dir,
+                                        'eval_' + str(rank) + '.json')
     metrics = VqaMetric(
         info={'split': 'train',
               'thread': rank},
         metric_names=['loss', 'accuracy', 'mean_rank', 'mean_reciprocal_rank'],
         log_json=args.output_log_path)
 
+    eval_metrics = VqaMetric(
+            info={'split': 'eval'},
+            metric_names=[
+                'loss', 'accuracy', 'mean_rank', 'mean_reciprocal_rank'
+            ],
+            log_json=eval_output_log_path)
+
     train_loader = EqaDataLoader(**train_loader_kwargs)
+    eval_loader = EqaDataLoader(**eval_loader_kwargs)
+
     if args.input_type == 'ques,image':
         train_loader.dataset._load_envs(start_idx=0, in_order=True)
 
     print('train_loader has %d samples' % len(train_loader.dataset))
+    print('eval_loader has %d samples' % len(eval_loader.dataset))
 
     t, epoch = 0, 0
+    best_eval_acc = 0
+    mean_rank = []
 
     while epoch < int(args.max_epochs):
 
@@ -270,23 +280,27 @@ def train(rank, args, shared_model):
                         metrics.dump_log()
 
         elif args.input_type == 'ques,image':
+            
+            t += 1
 
+            #TRAIN
+            model.train()
+            model.cuda()
             done = False
             all_envs_loaded = train_loader.dataset._check_if_all_envs_loaded()
-
+            #p = 0
             while done == False:
-
-                for batch in train_loader:
-
-                    t += 1
+                #print("Here now: ", epoch, p)
+                #p+=1
+                for num, batch in enumerate(train_loader):
+                    #pp=0
+                         done = True
+                         break
 
                     model.load_state_dict(shared_model.state_dict())
-                    model.train()
                     model.cuda()
 
                     idx, questions, answers, images, _, _, _ = batch
-                    #print("Questions", questions)
-                    #print("answers", answers)
                     questions_var = Variable(questions.cuda())
                     answers_var = Variable(answers.cuda())
                     images_var = Variable(images.cuda())
@@ -294,13 +308,12 @@ def train(rank, args, shared_model):
                     scores, att_probs = model(images_var, questions_var)
                     loss = lossFn(scores, answers_var)
 
-                    # zero grad
+                    #zero grad
                     optim.zero_grad()
 
-                    # update metrics
+                    #  update metrics
                     accuracy, ranks = metrics.compute_ranks(scores.data.cpu(), answers)
-                    #print("Accuracy", accuracy)
-                    metrics.update([loss.data[0], accuracy, ranks, 1.0 / ranks])
+                    metrics.update([loss.item(), accuracy, ranks, 1.0 / ranks])
 
                     # backprop and update
                     loss.backward()
@@ -317,8 +330,15 @@ def train(rank, args, shared_model):
                     train_loader.dataset._load_envs(in_order=True)
                     if len(train_loader.dataset.pruned_env_set) == 0:
                         done = True
+                       # SATYEN:
+                        if args.to_cache == False:
+                            train_loader.dataset._load_envs(start_idx=0, in_order=True)
                 else:
                     done = True
+
+        if epoch % args.eval_every == 0:
+
+           best_eval_acc = eval(0, args, model, best_eval_acc=best_eval_acc, epoch=epoch)
 
         epoch += 1
 
@@ -351,7 +371,7 @@ if __name__ == '__main__':
     parser.add_argument('-max_epochs', default=1000, type=int)
 
     # bookkeeping
-    parser.add_argument('-print_every', default=50, type=int)
+    parser.add_argument('-print_every', default=5, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
     parser.add_argument('-identifier', default='ques-image')
     parser.add_argument('-num_processes', default=1, type=int)
@@ -397,7 +417,7 @@ if __name__ == '__main__':
     if not os.path.exists(args.checkpoint_dir) and args.to_log == 1:
         os.makedirs(args.checkpoint_dir)
         os.makedirs(args.log_dir)
-        print("made dirs######################################33")
+        print("made dirs ######################################")
 
     if args.input_type == 'ques':
 
@@ -424,15 +444,16 @@ if __name__ == '__main__':
         processes = []
 
         # Start the eval thread
-        p = mp.Process(target=eval, args=(0, args, shared_model))
-        p.start()
-        processes.append(p)
+        # p = mp.Process(target=eval, args=(0, args, shared_model))
+        # p.start()
+        # processes.append(p)
 
         # Start the training thread(s)
-        for rank in range(1, args.num_processes + 1):
-            p = mp.Process(target=train, args=(rank, args, shared_model))
-            p.start()
-            processes.append(p)
+        #for rank in range(1, args.num_processes + 1):
+        #    p = mp.Process(target=train, args=(rank, args, shared_model))
+        #    p.start()
+        #    processes.append(p)
 
-        for p in processes:
-            p.join()
+        #for p in processes:
+        #    p.join()
+        train(0, args, shared_model)

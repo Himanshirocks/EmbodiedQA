@@ -184,6 +184,7 @@ class EqaDataset(Dataset):
         self.actions = _dataset_to_tensor(questions_h5['action_labels'])
         self.action_lengths = _dataset_to_tensor(
             questions_h5['action_lengths'])
+        self.cfg = load_config('../../House3D/tests/config.json')
 
         if max_actions: # max actions will allow us to create arrays of a certain length.  Helpful if you only want to train with 10 actions.
             assert isinstance(max_actions, int)
@@ -292,6 +293,7 @@ class EqaDataset(Dataset):
         return pruned_env_set
 
     def _load_envs(self, start_idx=-1, in_order=False):
+        self._clear_api_threads()
         self._clear_memory()
         if start_idx == -1:
             start_idx = self.env_set.index(self.pruned_env_set[-1]) + 1
@@ -307,18 +309,19 @@ class EqaDataset(Dataset):
             return
 
         # Load api threads
+        #self._clear_api_threads()
         start = time.time()
         if len(self.api_threads) == 0:
             for i in range(self.max_threads_per_gpu):
-                self.api_threads.append(
-                    objrender.RenderAPIThread(
-                        w=224, h=224, device=self.gpu_id))
+                api_temp = None
+                api_temp = objrender.RenderAPIThread(w=224, h=224, device=self.gpu_id) 
+                self.api_threads.append(api_temp)
 
-        try:
+        #try:
             # self.cfg = load_config('/home/satyen/GitHub_repos/our_EQA/House3D/tests/config.json')
-            self.cfg = load_config('../House3D/tests/config.json')
-        except:
-            self.cfg = load_config('../../House3D/tests/config.json') 
+        #    self.cfg = load_config('../House3D/tests/config.json')
+        #except:
+        #    self.cfg = load_config('../../House3D/tests/config.json') 
 
         print('[%.02f] Loaded %d api threads' % (time.time() - start,
                                                  len(self.api_threads)))
@@ -381,9 +384,9 @@ class EqaDataset(Dataset):
             del self.episode_house
         if hasattr(self, 'env_loaded'):
             del self.env_loaded
-        if hasattr(self, 'api_threads'):
-            del self.api_threads
-        self.api_threads = []
+        #if hasattr(self, 'api_threads'):
+        #    del self.api_threads
+        #self.api_threads = []
 
     def _check_if_all_envs_loaded(self):
         print('[CHECK][Cache:%d][Total:%d]' % (len(self.img_data_cache),
@@ -494,8 +497,7 @@ class EqaDataset(Dataset):
             if self.to_cache == True and index in self.img_data_cache:
                 images = self.img_data_cache[index]
             else:
-                pos_queue = self.pos_queue[index][
-                    -self.num_frames:]  # last 5 frames
+                pos_queue = self.pos_queue[index][-self.num_frames:]  # last 5 frames
                 images = self.get_frames(
                     self.env_loaded[self.env_list[index]],
                     pos_queue,
