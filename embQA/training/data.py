@@ -178,6 +178,7 @@ class EqaDataset(Dataset):
         self.img_data_cache = {}
 
         print('Reading question data into memory')
+        # self.idx -> Object ID
         self.idx = _dataset_to_tensor(questions_h5['idx'])
         self.questions = _dataset_to_tensor(questions_h5['questions'])
         self.answers = _dataset_to_tensor(questions_h5['answers'])
@@ -193,14 +194,14 @@ class EqaDataset(Dataset):
             new_lengths = np.ones((num_data_items,), dtype = np.int64) * max_actions
             for i in range(num_data_items):
                 action_length = int(self.action_lengths[i])
-                new_actions[i, 0] = 1 # CM: Dafuq?
+                new_actions[i, 0] = 1 
                 new_actions[i, 1:max_actions + 1] = self.actions[i, action_length-max_actions: action_length].numpy() 
             self.actions = torch.LongTensor(new_actions)
             self.action_lengths = torch.LongTensor(new_lengths)
 
         if self.data_json != False:
             data = json.load(open(self.data_json, 'r'))
-            self.envs = data['envs'] #CM: Gold mine!
+            self.envs = data['envs'] #Satyen: Gold mine!
 
             self.env_idx = data[self.split + '_env_idx']
             self.env_list = [self.envs[x] for x in self.env_idx]
@@ -726,7 +727,14 @@ class EqaDataset(Dataset):
             if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
                 min_ = 1
-                bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]['box']
+                bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]
+                trg_obj_name = bbox_obj['name']
+                bbox_obj = bbox_obj['box']
+                bbox_obj_min = np.array([bbox_obj['min'][x] for x in range(3)])
+                bbox_obj_max = np.array([bbox_obj['max'][x] for x in range(3)])
+                min_print = 0
+                max_print = 0
+                # print("target obj bbox:", bbox_obj_min, bbox_obj_max)
                 for obj_id in self.env_loaded[self.env_list[index]].objects:
                     box2 = self.env_loaded[self.env_list[index]].objects[obj_id]['bbox']
                     ############################ SATYEN ######################################
@@ -735,18 +743,21 @@ class EqaDataset(Dataset):
                     # print("BBOX_OBJ:max", [bbox_obj['max'][x] for x in range(3)])
                     # print("Box2:max", [box2['max'][x] for x in range(3)]) 
                     # print([ all(math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol=1e-6) for x in range(3) )])
-                    bbox_obj_min = np.array([bbox_obj['min'][x] for x in range(3)])
                     box2_min = np.array([box2['min'][x] for x in range(3) ])
-                    bbox_obj_max = np.array([bbox_obj['max'][x] for x in range(3)])
-                    box2_max = np.array([box2['max'][x] for x in range(3)])
-                    diff_min = np.mean(bbox_obj_min - box2_min)
-                    diff_max = np.mean(bbox_obj_max - box2_max)
-                    
+                    box2_max = np.array([box2['max'][x] for x in range(3) ])
+                    diff_min = np.mean(abs(bbox_obj_min - box2_min))
+                    diff_max = np.mean(abs(bbox_obj_max - box2_max))
+                   # print("Object from Environment", self.env_loaded[self.env_list[index]].objects[obj_id]['fine_class']) 
+                    #print("BBOX:::::", box2_min, box2_max)
                     if abs(diff_min + diff_max)/2 < min_:
                         min_ = (diff_min + diff_max)/2
                         target_obj_id = obj_id
-                    elif min_ == 1:
-                        target_obj_id = obj_id   
+                        min_print = box2_min
+                        max_print = box2_max
+                        #obj_iter_id = self.env_loaded[self.env_list[index]].objects[obj_id]['id']
+                    #elif min_ == 1:
+                    #    target_obj_id = obj_id   
+                #sys.exit()
                     #if all([math.isclose(bbox_obj['min'][x], box2['min'][x], abs_tol = 0.6) for x in range(3)]) == True and \
                     #    all([math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol = 0.6) for x in range(3)]) == True:
                     
@@ -754,9 +765,16 @@ class EqaDataset(Dataset):
                     #    break
 
                     ############################################################################
-
+                
+                #print("targetObj:{}".format(trg_obj_name))
+                #print("Target obj_iter",target_obj_id)
+                #print("env obj bbox", min_print, max_print)
+                ### Satyen: TARGET ROOM #################3333 
                 bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False][0]
                 min_ = 1
+                bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
+                bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
+
                 for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
                     ################ SATYEN ###############################################
                     # print("Room min", [room['bbox']['min'][x] for x in range(3)])
@@ -766,17 +784,17 @@ class EqaDataset(Dataset):
                     # print([ all(math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol=1e-6) for x in range(3) )])
                     room_min = np.array([room['bbox']['min'][x] for x in range(3)])
                     room_max = np.array([room['bbox']['max'][x] for x in range(3)])
-                    bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
-                    bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
-                    diff_min = np.mean(room_min-bbox_room_min)
-                    diff_max = np.mean(room_max - bbox_room_max)
+                    #bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
+                    #bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
+                    diff_min = np.mean(abs(room_min - bbox_room_min))
+                    diff_max = np.mean(abs(room_max - bbox_room_max))
                     
                     
                     if abs(diff_min + diff_max)/2 < min_:
                         min_ = (diff_min + diff_max)/2
                         target_room = room
-                    elif min_ == 1:
-                        target_room = room
+                    #elif min_ == 1:
+                    #    target_room = room
                     #if all([math.isclose(room['bbox']['min'][x], bbox_room['box']['min'][x], abs_tol = 0.6) for x in range(3)]) == True and \
                     #    all([math.isclose(room['bbox']['max'][x], bbox_room['box']['max'][x], abs_tol = 0.6) for x in range(3)]) == True:
                     #    target_room = room
@@ -793,6 +811,7 @@ class EqaDataset(Dataset):
                 self.episode_house = self.env_loaded[self.env_list[index]]
                 self.target_room = target_room
                 self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
+                #print("Target OBJ!!:from env ", self.target_obj)
 
                 return (idx, question, answer, actions, action_length)
 

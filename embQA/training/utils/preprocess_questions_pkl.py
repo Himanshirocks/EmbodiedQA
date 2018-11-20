@@ -170,7 +170,7 @@ if __name__ == '__main__':
     for houseID in list(data['questions'].keys()):
         if not checkObjs(args.suncg_data_dir, houseID):
             del data['questions'][houseID]
-            if houseID in data['splits']['train']:
+            if houseID in data['splits']['train']:  
                 data['splits']['train'].remove(houseID)
             if houseID in data['splits']['val']:
                 data['splits']['val'].remove(houseID)
@@ -182,8 +182,8 @@ if __name__ == '__main__':
     
 
     questions = []
-
-    for h in houses:
+    # List of all questions in dataset
+    for i, h in enumerate(houses):
         print(h, len(houses[h]))
         for q in houses[h]:
             if len(str(q['answer']).split(' ')) > 1:
@@ -251,8 +251,11 @@ if __name__ == '__main__':
         assert q['question'] == nav['question']
 
     args.num_ques = len(idx)
+    # SAtyen: How are they retaining 1 to 1 correspodence between ques and idx if there is a missing     id
+    print("LENGTH of IDX: ", len(idx), "Length of questions", len(questions))
     maxALength = max(action_lengths) + 1
-
+    # Satyen: PAd action labels!
+    
     action_labels_mat = np.zeros(
         (len(questions[:args.num_ques]), maxALength), dtype=np.int16)
     action_labels_mat.fill(0)  # 0 = null
@@ -277,7 +280,7 @@ if __name__ == '__main__':
 
     assert any([x in train_envs for x in test_envs]) == False
     assert any([x in train_envs for x in val_envs]) == False
-
+    # Get shuffled indexes
     train_inds = [i for i in inds if envs[i] in train_envs]
     val_inds = [i for i in inds if envs[i] in val_envs]
     test_inds = [i for i in inds if envs[i] in test_envs]

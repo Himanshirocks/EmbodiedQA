@@ -521,8 +521,8 @@ def eval(rank, args, shared_model):
                     idx, question, answer, actions, action_length = batch
                     metrics_slug = {}
 
-                    print('Question is ', question)
-                    print('answer is ', answer)
+                    #print('Question is ', question)
+                    #print('answer is ', answer)
 
                     answeris = answer.item()
 
@@ -1176,15 +1176,15 @@ def train(rank, args, shared_model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # data params
-    parser.add_argument('-train_h5', default='data/train.h5')
-    parser.add_argument('-val_h5', default='data/val.h5')
-    parser.add_argument('-test_h5', default='data/test.h5')
-    parser.add_argument('-data_json', default='data/data.json')
-    parser.add_argument('-vocab_json', default='data/vocab.json')
+    parser.add_argument('-train_h5', default='utils/data/pruned_train.h5')
+    parser.add_argument('-val_h5', default='utils/data/pruned_val.h5')
+    parser.add_argument('-test_h5', default='utils/data/pruned_test.h5')
+    parser.add_argument('-data_json', default='utils/data/pruned_data.json')
+    parser.add_argument('-vocab_json', default='utils/data/pruned_vocab.json')
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='data/target-obj-conn-maps/500')
+        default='data/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(
