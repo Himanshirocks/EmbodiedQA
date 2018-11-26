@@ -34,7 +34,7 @@ except AttributeError:
 
 ################################################################################################
 
-def eval(rank, args, shared_model):
+def eval(rank, args, shared_model, best_eval_acc):
 
     #torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -111,7 +111,7 @@ def eval(rank, args, shared_model):
     max_epochs = args.max_epochs
     if args.mode == 'eval':
         max_epochs = 1
-    while epoch < int(max_epochs):
+    while epoch < 1:
 
         invalids = []
 
@@ -512,8 +512,9 @@ def eval(rank, args, shared_model):
                             'ep_len_30', 'ep_len_50'
                         ],
                         log_json=args.output_log_path)
-
-                for batch in tqdm(eval_loader):
+                #time_img = time.strftime("%m_%d_%H:%M")
+                
+                for num, batch in enumerate(tqdm(eval_loader)):
 
                     model.load_state_dict(shared_model.state_dict())
                     model.to(device)
@@ -540,8 +541,9 @@ def eval(rank, args, shared_model):
                         #Satyen suggests Himi changes ----> works
                         fourcc = cv2.VideoWriter_fourcc(*'XVID')
                         time_now = time.strftime("%m_%d_%H:%M")
-                        video_name = '%s_video_%d_%d.avi' %(time_now, i, answeris)
-                        video = cv2.VideoWriter(video_name, fourcc, 5, (224, 224))
+                        if args.render:
+                            video_name = '%s_video_%d_%d.avi' %(time_now, i, answeris)
+                            video = cv2.VideoWriter(video_name, fourcc, 5, (224, 224))
 
                         t += 1
 
@@ -667,9 +669,8 @@ def eval(rank, args, shared_model):
                                 break
 
                             img, _, _ = h3d.step(action)
-                            # img2 = Image.fromarray(img, 'RGB')
+                            #cv2.imwrite('{}-{}-{}-{}.png'.format(num, i, episode_length, time_img), img)
                             if args.render:
-                                # img2.show()
                                 # cv2.imshow('window', img)
                                 # cv2.waitKey(100)
                                 video.write(img)
@@ -677,7 +678,8 @@ def eval(rank, args, shared_model):
 
                             
 
-                        video.release()
+                        if args.render:
+                            video.release()
                         # compute stats
                         metrics_slug['d_0_' + str(i)] = dists_to_target[0]
                         metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
@@ -760,9 +762,9 @@ def eval(rank, args, shared_model):
         logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
 
         eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+    return best_eval_acc
 
-
-def train(rank, args, shared_model):
+def train(rank, args, shared_model, resume_epoch = 0):
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
     if args.model_type == 'cnn':
@@ -855,8 +857,8 @@ def train(rank, args, shared_model):
     print('train_loader has %d samples' % len(train_loader.dataset))
     logging.info('TRAIN: train loader has {} samples'.format(len(train_loader.dataset)))
 
-    t, epoch = 0, 0
-
+    t, epoch = 0, resume_epoch
+    best_eval_acc = 0 if args.best_eval_acc==0 else args.best_eval_acc
     while epoch < int(args.max_epochs):
         if 'cnn' in args.model_type:
 
@@ -1149,6 +1151,8 @@ def train(rank, args, shared_model):
                     done = True
 
         epoch += 1
+        if epoch % args.eval_every ==0:
+            best_eval_acc = eval(rank,args,shared_model,  best_eval_acc)
 
         if epoch % args.save_every == 0:
 
@@ -1176,11 +1180,11 @@ def train(rank, args, shared_model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # data params
-    parser.add_argument('-train_h5', default='utils/data/pruned_train.h5')
-    parser.add_argument('-val_h5', default='utils/data/pruned_val.h5')
-    parser.add_argument('-test_h5', default='utils/data/pruned_test.h5')
-    parser.add_argument('-data_json', default='utils/data/pruned_data.json')
-    parser.add_argument('-vocab_json', default='utils/data/pruned_vocab.json')
+    parser.add_argument('-train_h5', default='utils/data/pruned_train_v2.h5')
+    parser.add_argument('-val_h5', default='utils/data/pruned_val_v2.h5')
+    parser.add_argument('-test_h5', default='utils/data/pruned_test_v2.h5')
+    parser.add_argument('-data_json', default='utils/data/pruned_data_json_v2.json')
+    parser.add_argument('-vocab_json', default='data/new_vocab.json')
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
@@ -1224,6 +1228,7 @@ if __name__ == '__main__':
     parser.add_argument('-to_cache', action='store_true')
     parser.add_argument('-max_controller_actions', type=int, default=5)
     parser.add_argument('-max_actions', type=int)
+    parser.add_argument('-best_eval_acc', type=float, default=0)
     args = parser.parse_args()
 
     args.time_id = time.strftime("%m_%d_%H:%M")
@@ -1321,15 +1326,15 @@ if __name__ == '__main__':
         exit()
 
     shared_model.share_memory()
-
+    resume_epoch = 0
     if args.checkpoint_path != False:
         print('Loading params from checkpoint: %s' % args.checkpoint_path)
         logging.info("Loading params from checkpoint: {}".format(args.checkpoint_path))
         shared_model.load_state_dict(checkpoint['state'])
-
+        resume_epoch = checkpoint['epoch']
     if args.mode == 'eval':
 
-        eval(0, args, shared_model)
+        eval(0, args, shared_model, 20)
 
     elif args.mode == 'train':
 
@@ -1345,20 +1350,20 @@ if __name__ == '__main__':
                 p.join()
  
         else:
-            train(0, args, shared_model)
+            train(0, args, shared_model, resume_epoch = resume_epoch)
 
     else:
         processes = []
 
         # Start the eval thread
-        p = mp.Process(target=eval, args=(0, args, shared_model))
-        p.start()
-        processes.append(p)
+        #p = mp.Process(target=eval, args=(0, args, shared_model))
+        #p.start()
+        #processes.append(p)
 
         # Start the training thread(s)
         for rank in range(1, args.num_processes + 1):
             # for rank in range(0, args.num_processes):
-            p = mp.Process(target=train, args=(rank, args, shared_model))
+            p = mp.Process(target=train, args=(rank, args, shared_model, resume_epoch))
             p.start()
             processes.append(p)
 

@@ -28,7 +28,7 @@ from models import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab, flat_to_hierarchical_actions
 import cv2
 
-def eval(rank, args, shared_nav_model, shared_ans_model):
+def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=0):
 
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
@@ -67,7 +67,7 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
     args.output_ans_log_path = os.path.join(args.log_dir,
                                             'ans_eval_' + str(rank) + '.json')
 
-    t, epoch, best_eval_acc = 0, 0, 0.0
+    t, epoch = 0, 0
 
     while epoch < int(args.max_epochs): #Himi changes
         print('###############################')
@@ -121,8 +121,8 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
 
                     idx, question, answer, actions, action_length = batch
                     metrics_slug = {}
-                    # print('question is: ', question)
-                    # print('answer is: ', answer)
+                    print('question is: ', question)
+                    print('answer is: ', answer)
                     h3d = eval_loader.dataset.episode_house
                     
                     ##########
@@ -301,11 +301,11 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                         images = eval_loader.dataset.get_frames(
                             h3d, pos_queue[-5:], preprocess=True)
 
-                        print((images.shape))
+                        #print((images.shape))
 
-                        for i, img in enumerate(images):
-                            img = np.transpose(img, axes=(2,1,0))
-                            cv2.imwrite('image_{}.png'.format(i),img)
+                        #for i, img in enumerate(images):
+                        #    img = np.transpose(img, axes=(2,1,0))
+                        #    cv2.imwrite('image_{}.png'.format(i),img)
 
 
                         images_var = Variable(
@@ -322,10 +322,10 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
                         print('[A_GT]', ' '.join([eval_loader.dataset.vocab['answerIdxToToken'][answer[0].item()]]))
                         print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
                         #Himi 
-                        print('Acc is: ', ans_acc)
-                        if 1 in ans_acc:
-                            print("ACCURACY 1")
-                        print('Mean Rank Is: ', ans_rank)
+                        #print('Acc is: ', ans_acc)
+                        #if 1 in ans_acc:
+                        #    print("ACCURACY 1")
+                        #print('Mean Rank Is: ', ans_rank)
                         # print(pred_answer)
                         # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
 
@@ -441,6 +441,7 @@ def eval(rank, args, shared_nav_model, shared_ans_model):
         print('[best_eval_ans_acc_50:%.04f]' % best_eval_acc)
 
         eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+    return best_eval_acc
 
 
 def train(rank, args, shared_nav_model, shared_ans_model):
@@ -514,7 +515,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
     nav_metrics.update([10.0, 10.0, 0, 100])
 
     mult = 0.1
-
+    best_eval_acc = 0.0
     while epoch < int(args.max_epochs):
 
         print('###############################')
@@ -847,6 +848,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     done = True
 
         epoch += 1
+        best_eval_acc = eval(0, args, nav_model, ans_model, best_eval_acc, epoch)
         #Himi changes
         # if epoch % args.save_every == 0 and args.to_log == 1:
         #     vqa_metrics.dump_log()
@@ -871,15 +873,15 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # data params
-    parser.add_argument('-train_h5', default='data/train.h5')
-    parser.add_argument('-val_h5', default='data/val.h5')
-    parser.add_argument('-test_h5', default='data/test.h5')
-    parser.add_argument('-data_json', default='data/data.json')
-    parser.add_argument('-vocab_json', default='data/vocab.json')
-
+    parser.add_argument('-train_h5', default='utils/data/pruned_train_v2.h5')
+    parser.add_argument('-val_h5', default='utils/data/pruned_val_v2.h5')
+    parser.add_argument('-test_h5', default='utils/data/pruned_test_v2.h5')
+    parser.add_argument('-data_json', default='utils/data/pruned_data_json_v2.json')
+    #parser.add_argument('-vocab_json', default='utils/data/pruned_vocab.json')
+    parser.add_argument('-vocab_json', default = 'data/new_vocab.json')
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='data/target-obj-conn-maps/500')
+        default='data/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(
@@ -903,15 +905,15 @@ if __name__ == '__main__':
 
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
-    parser.add_argument('-eval_every', default=5, type=int)
-    parser.add_argument('-identifier', default='ques-image-eqa')
+    parser.add_argument('-eval_every', default=1, type=int)
+    parser.add_argument('-identifier', default='pacman')
     parser.add_argument('-num_processes', default=1, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
 
     # checkpointing
     parser.add_argument('-nav_checkpoint_path', default=False)
     parser.add_argument('-ans_checkpoint_path', default=False)
-
+    parser.add_argument('-eqa_checkpoint_path', default=None)
     parser.add_argument('-checkpoint_dir', default='checkpoints/eqa/')
     parser.add_argument('-log_dir', default='logs/eqa/')
     parser.add_argument('-to_log', default=1, type=int)
@@ -945,7 +947,12 @@ if __name__ == '__main__':
                                        args.time_id + '_' + args.identifier)
     args.log_dir = os.path.join(args.log_dir,
                                 args.time_id + '_' + args.identifier)
-    print(args.__dict__)
+    #print(args.__dict__)
+    
+    if args.eqa_checkpoint_path is not None:
+        eqa_checkpoint = torch.load(args.eqa_checkpoint_path, map_location={'cuda:0':'cpu'})
+        args.checkpoint_dir = eqa_checkpoint['args']['checkpoint_dir']
+        args.log_dir = eqa_checkpoint['args']['log_dir']
 
     if not os.path.exists(args.checkpoint_dir) and args.to_log == 1:
         os.makedirs(args.checkpoint_dir)

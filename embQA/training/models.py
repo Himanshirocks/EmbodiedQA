@@ -329,6 +329,7 @@ class QuestionLstmEncoder(nn.Module):
         self.END = token_to_idx['<END>']
 
         self.embed = nn.Embedding(len(token_to_idx), wordvec_dim)
+        print(self.embed)
         self.rnn = nn.LSTM(
             wordvec_dim,
             rnn_dim,

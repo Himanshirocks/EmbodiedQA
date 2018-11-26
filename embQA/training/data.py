@@ -539,8 +539,7 @@ class EqaDataset(Dataset):
             # when target_obj_conn_map_dir is defined (reinforce),
             # load entire shortest path navigation trajectory
             # and load connectivity map for intermediate rewards
-            if self.split in ['val', 'test'
-                              ] or self.target_obj_conn_map_dir != False:
+            if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
                 bbox_obj = [
                     x for x in self.boxes[index]
@@ -742,24 +741,17 @@ class EqaDataset(Dataset):
                     # print("BOX2 min:", [box2['min'][x] for x in range(3)])
                     # print("BBOX_OBJ:max", [bbox_obj['max'][x] for x in range(3)])
                     # print("Box2:max", [box2['max'][x] for x in range(3)]) 
-                    # print([ all(math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol=1e-6) for x in range(3) )])
                     box2_min = np.array([box2['min'][x] for x in range(3) ])
                     box2_max = np.array([box2['max'][x] for x in range(3) ])
                     diff_min = np.mean(abs(bbox_obj_min - box2_min))
                     diff_max = np.mean(abs(bbox_obj_max - box2_max))
-                   # print("Object from Environment", self.env_loaded[self.env_list[index]].objects[obj_id]['fine_class']) 
-                    #print("BBOX:::::", box2_min, box2_max)
                     if abs(diff_min + diff_max)/2 < min_:
                         min_ = (diff_min + diff_max)/2
                         target_obj_id = obj_id
                         min_print = box2_min
                         max_print = box2_max
                         #obj_iter_id = self.env_loaded[self.env_list[index]].objects[obj_id]['id']
-                    #elif min_ == 1:
-                    #    target_obj_id = obj_id   
                 #sys.exit()
-                    #if all([math.isclose(bbox_obj['min'][x], box2['min'][x], abs_tol = 0.6) for x in range(3)]) == True and \
-                    #    all([math.isclose(bbox_obj['max'][x], box2['max'][x], abs_tol = 0.6) for x in range(3)]) == True:
                     
                     #    target_obj_id = obj_id
                     #    break
@@ -967,7 +959,7 @@ if __name__ == '__main__':
     parser.add_argument('-val_h5', default='data/04_22/val_v1.h5')
     parser.add_argument('-data_json', default='data/04_22/data_v1.json')
     parser.add_argument('-vocab_json', default='data/04_22/vocab_v1.json')
-    parser.add_argument('num_frames',default=5, type=int)  # -1 = all frames of navigation sequence
+    parser.add_argument('-num_frames',default=5, type=int)  # -1 = all frames of navigation sequence
 
     parser.add_argument('-batch_size', default=50, type=int)
     parser.add_argument('-max_threads_per_gpu', default=10, type=int)
