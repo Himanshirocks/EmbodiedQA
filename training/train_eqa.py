@@ -503,8 +503,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                         actions[0, :action_length[0] + 1].numpy(),
                         max(3, int(mult * action_length[0])))
 
-                    planner_actions_in_var = Variable(
-                        planner_actions_in.cuda())
+                    planner_actions_in_var = Variable(planner_actions_in.cuda())
                     planner_img_feats_var = Variable(planner_img_feats.cuda())
 
                     for step in range(planner_actions_in.size(0)):
@@ -545,25 +544,21 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                         prob = F.softmax(planner_scores, dim=1)
                         action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
-                        action_in = torch.LongTensor(
-                            1, 1).fill_(action + 1).cuda()
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
 
-                    h3d.env.reset(
-                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
-                    init_dist_to_target = h3d.get_dist_to_target(
-                        h3d.env.cam.pos)
+                    init_dist_to_target = h3d.get_dist_to_target(h3d.env.cam.pos)
+                    
                     if init_dist_to_target < 0:  # unreachable
-                        # invalids.append([idx[0], i])
+                        invalids.append([idx[0], i])
                         continue
 
                     episode_length = 0
                     episode_done = True
                     controller_action_counter = 0
 
-                    dists_to_target, pos_queue = [init_dist_to_target], [
-                        init_pos
-                    ]
+                    dists_to_target, pos_queue = [init_dist_to_target], [init_pos]
 
                     rewards, planner_actions, planner_log_probs, controller_actions, controller_log_probs = [], [], [], [], []
 
@@ -582,23 +577,22 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             episode_length += 1
 
                             if controller_step == False:
-                                planner_scores, planner_hidden = nav_model.planner_step(
-                                    question_var, img_feat_var,
-                                    Variable(action_in), planner_hidden)
+                                planner_scores, planner_hidden = nav_model.planner_step(question_var, img_feat_var, Variable(action_in), planner_hidden)
 
                                 planner_prob = F.softmax(planner_scores, dim=1)
-                                planner_log_prob = F.log_softmax(
-                                    planner_scores, dim=1)
+                                planner_log_prob = F.log_softmax(planner_scores, dim=1)
 
                                 action = planner_prob.multinomial().data
-                                planner_log_prob = planner_log_prob.gather(
-                                    1, Variable(action))
+                                planner_log_prob = planner_log_prob.gather(1, Variable(action))
 
-                                planner_log_probs.append(
-                                    planner_log_prob.cpu())
+                                planner_log_probs.append(planner_log_prob.cpu())
 
                                 action = int(action.cpu().numpy()[0, 0])
                                 planner_actions.append(action)
+
+                                # Saty:
+                                # Evaluate coverage here and planner should take stop!
+                                # Minimize Cross entropy here!
 
                             img, rwd, episode_done = h3d.step(action, step_reward=True)
 
@@ -606,14 +600,12 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                             rewards.append(rwd)
 
-                            img = torch.from_numpy(img.transpose(
-                                2, 0, 1)).float() / 255.0
-                            img_feat_var = train_loader.dataset.cnn(
-                                Variable(img.view(1, 3, 224, 224)
-                                         .cuda())).view(1, 1, 3200)
+                            img = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
+                            img_feat_var = train_loader.dataset.cnn(Variable(img.view(1, 3, 224, 224).cuda())).view(1, 1, 3200)
 
                             dists_to_target.append(
                                 h3d.get_dist_to_target(h3d.env.cam.pos))
+                            
                             pos_queue.append([
                                 h3d.env.cam.pos.x, h3d.env.cam.pos.y,
                                 h3d.env.cam.pos.z, h3d.env.cam.yaw
@@ -629,16 +621,12 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                                 img_feat_var, controller_action_in,
                                 planner_hidden[0])
 
-                            controller_prob = F.softmax(
-                                controller_scores, dim=1)
-                            controller_log_prob = F.log_softmax(
-                                controller_scores, dim=1)
+                            controller_prob = F.softmax(controller_scores, dim=1)
+                            controller_log_prob = F.log_softmax(controller_scores, dim=1)
 
-                            controller_action = controller_prob.multinomial(
-                            ).data
+                            controller_action = controller_prob.multinomial().data
 
-                            if int(controller_action[0]
-                                   ) == 1 and controller_action_counter < 4:
+                            if int(controller_action[0]) == 1 and controller_action_counter < 4:
                                 controller_action_counter += 1
                                 controller_step = True
                             else:
@@ -646,16 +634,12 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                                 controller_step = False
                                 controller_action.fill_(0)
 
-                            controller_log_prob = controller_log_prob.gather(
-                                1, Variable(controller_action))
-                            controller_log_probs.append(
-                                controller_log_prob.cpu())
+                            controller_log_prob = controller_log_prob.gather(1, Variable(controller_action))
+                            controller_log_probs.append(controller_log_prob.cpu())
 
-                            controller_action = int(
-                                controller_action.cpu().numpy()[0, 0])
+                            controller_action = int(controller_action.cpu().numpy()[0, 0])
                             controller_actions.append(controller_action)
-                            action_in = torch.LongTensor(
-                                1, 1).fill_(action + 1).cuda()
+                            action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
 
                     # run answerer here
                     ans_acc = [0]
@@ -681,6 +665,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     controller_loss = 0
 
                     planner_rev_idx = -1
+                    # Saty: Calculate reversed rewards for REINFORCE
                     for i in reversed(range(len(rewards))):
                         R = 0.99 * R + rewards[i]
                         advantage = R - nav_metrics.metrics[2][1]
@@ -705,8 +690,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                     optim.zero_grad()
 
-                    if isinstance(planner_loss, float) == False and isinstance(
-                            controller_loss, float) == False:
+                    if isinstance(planner_loss, float) == False and isinstance(controller_loss, float) == False:
                         p_losses.append(planner_loss.data[0, 0])
                         c_losses.append(controller_loss.data[0, 0])
                         reward_list.append(np.sum(rewards))
