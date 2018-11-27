@@ -57,6 +57,15 @@ output sequence for planner is [f, l, f, r, <end>]
 input sequences to controller are [f, f, l, l, f, f, f, r]
 output sequences for controller are [1, 0, 1, 0, 1, 1, 0, 0]
 """
+"""
+Saty:
+Actions in the dataset are <start>=1, forward = 2, right=3, left = 4, stop=5
+Sample actions from the dataset: 
+[1, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 4, 4, 4, 2, 4, 4, 4, 2, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+ 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4, 4, 2, 4, 4, 2, 2, 2, 2, 4, 2, 2, 2, 2, 3, 5] 
+If these actions have been arrived at through A*, why so many consecutive 4's(lefts)? 
+This means that the visualizations that we did for nav (that learned through Imitation learning) was correct acutally!?
+"""
 def flat_to_hierarchical_actions(actions, controller_action_lim):
     assert len(actions) != 0
 
@@ -65,7 +74,7 @@ def flat_to_hierarchical_actions(actions, controller_action_lim):
     planner_actions, controller_actions = [1], []
     prev_action = 1
 
-    pq_idx, cq_idx, ph_idx = [], [], [] # CM: Don't get why these are for?
+    pq_idx, cq_idx, ph_idx = [], [], [] 
     ph_trck = 0
 
     for i in range(1, len(actions)):
@@ -183,15 +192,16 @@ class EqaDataset(Dataset):
         self.questions = _dataset_to_tensor(questions_h5['questions'])
         self.answers = _dataset_to_tensor(questions_h5['answers'])
         self.actions = _dataset_to_tensor(questions_h5['action_labels'])
-        self.action_lengths = _dataset_to_tensor(
-            questions_h5['action_lengths'])
+        self.action_lengths = _dataset_to_tensor(questions_h5['action_lengths'])
         self.cfg = load_config('../../House3D/tests/config.json')
 
+        # Saty: max_actions is None!
         if max_actions: # max actions will allow us to create arrays of a certain length.  Helpful if you only want to train with 10 actions.
             assert isinstance(max_actions, int)
             num_data_items = self.actions.shape[0]
-            new_actions = np.zeros((num_data_items, max_actions + 2), dtype=np.int64) #CM: WHY 2? -> for <start> and <end>
+            new_actions = np.zeros((num_data_items, max_actions + 2), dtype=np.int64) #Saty: WHY +2? -> for <start> and <end>
             new_lengths = np.ones((num_data_items,), dtype = np.int64) * max_actions
+            
             for i in range(num_data_items):
                 action_length = int(self.action_lengths[i])
                 new_actions[i, 0] = 1 
@@ -215,8 +225,7 @@ class EqaDataset(Dataset):
                 logging.info('Trying to overfit to [house {}]'.format(self.env_set[0]))
 
             print('Total envs: %d' % len(list(set(self.envs))))
-            print('Envs in %s: %d' % (self.split,
-                                      len(list(set(self.env_idx)))))
+            print('Envs in %s: %d' % (self.split, len(list(set(self.env_idx)))))
 
             if input_type != 'ques':
                 ''''
@@ -243,7 +252,7 @@ class EqaDataset(Dataset):
 
             if max_actions:
                 for i in range(len(self.pos_queue)):
-                    self.pos_queue[i] = self.pos_queue[i][-1*max_actions:] 
+                    self.pos_queue[i] = self.pos_queue[i][-1*max_actions:]
 
         if input_type == 'pacman':
 
@@ -251,19 +260,19 @@ class EqaDataset(Dataset):
             self.controller_actions = self.actions.clone().fill_(-1)
 
             self.planner_action_lengths = self.action_lengths.clone().fill_(0)
-            self.controller_action_lengths = self.action_lengths.clone().fill_(
-                0)
+            self.controller_action_lengths = self.action_lengths.clone().fill_(0)
 
             self.planner_hidden_idx = self.actions.clone().fill_(0)
 
             self.planner_pos_queue_idx, self.controller_pos_queue_idx = [], []
 
             # parsing flat actions to planner-controller hierarchy
+            print(" Parsing flat actions to planner-controller hierarchy")
             for i in tqdm(range(len(self.actions))):
 
                 pa, ca, pq_idx, cq_idx, ph_idx = flat_to_hierarchical_actions(
-                    actions=self.actions[i][:self.action_lengths[i]+1],
-                    controller_action_lim=max_controller_actions)
+                    actions=self.actions[i][:self.action_lengths[i]+1], # Saty: Take all actions essentially ; This doesn't have <start> and <end>
+                    controller_action_lim=max_controller_actions) # saty: This is 5
 
                 self.planner_actions[i][:len(pa)] = torch.Tensor(pa)
                 self.controller_actions[i][:len(ca)] = torch.Tensor(ca)
@@ -272,7 +281,7 @@ class EqaDataset(Dataset):
                 self.controller_action_lengths[i] = len(ca)
 
                 self.planner_pos_queue_idx.append(pq_idx)
-                self.controller_pos_queue_idx.append(cq_idx)
+                self.controller_pos_queue_idx.append(cq_idx) # Saty: This is just [1,2,3,4/.. , len(actions)]
 
                 self.planner_hidden_idx[i][:len(ca)] = torch.Tensor(ph_idx)
 
@@ -428,6 +437,7 @@ class EqaDataset(Dataset):
 
         return np.array(res)
 
+    # Confused about this function!
     def get_hierarchical_features_till_spawn(self, actions, backtrack_steps=0, max_controller_actions=5):
 
         action_length = len(actions)-1
@@ -436,6 +446,7 @@ class EqaDataset(Dataset):
             controller_action_lim=max_controller_actions)
         
         # count how many actions of same type have been encountered pefore starting navigation
+        # Not used in train_eval -> train()
         backtrack_controller_steps = actions[1:action_length - backtrack_steps + 1:][::-1]
         counter = 0 
         try:
@@ -445,6 +456,7 @@ class EqaDataset(Dataset):
         except:
             import pdb; pdb.set_trace() #If you have breakpoint here, you probably found an error in the logit above to figure out the correct counter step.  Still working on this and checking. 
 
+        #####################################################################################
         target_pos_idx = action_length - backtrack_steps
 
         controller_step = True
@@ -463,6 +475,7 @@ class EqaDataset(Dataset):
                      .to(self.device))).data.cpu().numpy().copy()
 
         controller_img_feat = torch.from_numpy(raw_img_feats[target_pos_idx].copy())
+        # Last action taken by the planner!
         controller_action_in = pa_pruned[-1] - 2
 
         planner_img_feats = torch.from_numpy(raw_img_feats[pq_idx_pruned].copy())
@@ -712,17 +725,22 @@ class EqaDataset(Dataset):
                         self.env_loaded[self.env_list[index]],
                         pos_queue,
                         preprocess=True)
+                    
                     raw_img_feats = self.cnn(
-                        Variable(torch.FloatTensor(images)
-                                 .to(self.device))).data.cpu().numpy().copy()
+                        Variable(torch.FloatTensor(images).to(self.device))).data.cpu().numpy().copy()
+                    
+                    # Saty: Actions or which there are no image features?
+                    # Raw img_feats.shape[1] = 3200
                     img_feats = np.zeros(
                         (self.actions.shape[1], raw_img_feats.shape[1]),
                         dtype=np.float32)
-                    img_feats[:raw_img_feats.shape[
-                        0], :] = raw_img_feats.copy()
+                    
+                    img_feats[:raw_img_feats.shape[0], :] = raw_img_feats.copy()
+                    
                     if self.to_cache == True:
                         self.img_data_cache[index] = img_feats
 
+            # LOL! Goes into this- since we're giving target+obj_conn_map_dir
             if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
                 min_ = 1
@@ -810,25 +828,26 @@ class EqaDataset(Dataset):
             planner_pos_queue_idx = self.planner_pos_queue_idx[index]
             controller_pos_queue_idx = self.controller_pos_queue_idx[index]
 
-            planner_img_feats = np.zeros(
-                (self.actions.shape[1], img_feats.shape[1]), dtype=np.float32)
-            planner_img_feats[:planner_action_length] = img_feats[
-                planner_pos_queue_idx]
+            # Saty: Get img_feats only for the places wherePLNR makes a prediction. Stored in planner_pos_queue_idx
+            planner_img_feats = np.zeros((self.actions.shape[1], img_feats.shape[1]), dtype=np.float32)
+            planner_img_feats[:planner_action_length] = img_feats[planner_pos_queue_idx]
 
-            planner_actions_in = planner_actions.clone() - 1
-            planner_actions_out = planner_actions[1:].clone() - 2
+            planner_actions_in = planner_actions.clone() - 1 # planner actions  \in [0,4] # WHY[0,4]? Where forward = 1?
+            planner_actions_in[planner_action_length:].fill_(0) # mask the elements after planner action length = 0
 
-            planner_actions_in[planner_action_length:].fill_(0)
-            planner_mask = planner_actions_out.clone().gt(-1)
+            planner_actions_out = planner_actions[1:].clone() - 2 # planner actions_out \in [-1.3]
+            # -1 -> START 0-> forward.. etc;        ^ALSO! Shifted by -> Makes sense
+
+            planner_mask = planner_actions_out.clone().gt(-1) # gt -> Greater than! :|
+            
             if len(planner_actions_out) > planner_action_length:
                 planner_actions_out[planner_action_length:].fill_(0)
 
-            controller_img_feats = np.zeros(
-                (self.actions.shape[1], img_feats.shape[1]), dtype=np.float32)
-            controller_img_feats[:controller_action_length] = img_feats[
-                controller_pos_queue_idx]
+            controller_img_feats = np.zeros((self.actions.shape[1], img_feats.shape[1]), dtype=np.float32)
+            
+            controller_img_feats[:controller_action_length] = img_feats[controller_pos_queue_idx]
 
-            controller_actions_in = actions[1:].clone() - 2
+            controller_actions_in = actions[1:].clone() - 2 # passed into the controller itself!
             if len(controller_actions_in) > controller_action_length:
                 controller_actions_in[controller_action_length:].fill_(0)
 
@@ -841,7 +860,7 @@ class EqaDataset(Dataset):
             for i in range(controller_action_length):
                 if i >= self.max_controller_actions - 1 and controller_out[i] == 0 and \
                         (self.max_controller_actions == 1 or
-                         controller_out[i - self.max_controller_actions + 1:i].sum()
+                         controller_out[i - self.max_controller_actions + 1:i].sum() 
                          == self.max_controller_actions - 1):
                     controller_mask[i] = 0
                     

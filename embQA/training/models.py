@@ -622,12 +622,7 @@ class NavRnnMult(nn.Module):
                 weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
                 .zero_())
 
-    def forward(self,
-                img_feats,
-                question_feats,
-                actions_in,
-                action_lengths,
-                hidden=False):
+    def forward(self,img_feats,question_feats,actions_in,action_lengths,hidden=False):
         input_feats = Variable()
 
         T = False
@@ -679,6 +674,7 @@ class NavRnnMult(nn.Module):
             question_feats = question_feats.view(N, 1, D)
             if T == False:
                 T = actions_in.size(1)
+            
             question_feats = question_feats.repeat(1, T, 1)
             if len(input_feats) == 0:
                 input_feats = question_feats
@@ -699,7 +695,6 @@ class NavRnnMult(nn.Module):
             output.size(0) * output.size(1), output.size(2)))
 
         return output, hidden
-
 
 class NavRnn(nn.Module):
     def __init__(self,
@@ -776,12 +771,7 @@ class NavRnn(nn.Module):
                 weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
                 .zero_())
 
-    def forward(self,
-                img_feats,
-                question_feats,
-                actions_in,
-                action_lengths,
-                hidden=False):
+    def forward(self, img_feats, question_feats, actions_in,  action_lengths, hidden=False):
         input_feats = Variable()
 
         T = False
@@ -830,9 +820,12 @@ class NavRnn(nn.Module):
         if self.question_input == True:
             N, D = question_feats.size()
             question_feats = question_feats.view(N, 1, D)
+            
             if T == False:
                 T = actions_in.size(1)
+            
             question_feats = question_feats.repeat(1, T, 1)
+            
             if len(input_feats) == 0:
                 input_feats = question_feats
             else:
@@ -938,7 +931,6 @@ class NavCnnRnnMultModel(nn.Module):
 
         return output, hidden
 
-
 class NavCnnRnnModel(nn.Module):
     def __init__(
             self,
@@ -1025,7 +1017,6 @@ class NavCnnRnnModel(nn.Module):
 
         return output, hidden
 
-
 class NavPlannerControllerModel(nn.Module):
     def __init__(self,
                  question_vocab,
@@ -1056,6 +1047,8 @@ class NavPlannerControllerModel(nn.Module):
             'rnn_dropout': question_dropout,
         }
         self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
+        # Saty: Fine tunes Question embedding obtained from the question LSTM Encoder. Ue GRU, here instead?
+        # we aren't concerned about the cell state, are we? 
         self.ques_tr = nn.Sequential(
             nn.Linear(question_hidden_dim, question_hidden_dim),
             nn.ReLU(),
@@ -1088,16 +1081,7 @@ class NavPlannerControllerModel(nn.Module):
         }
         self.controller = build_mlp(**controller_kwargs)
 
-    def forward(self,
-                questions,
-                planner_img_feats,
-                planner_actions_in,
-                planner_action_lengths,
-                planner_hidden_index,
-                controller_img_feats,
-                controller_actions_in,
-                controller_action_lengths,
-                planner_hidden=False):
+    def forward(self,questions,planner_img_feats,  planner_actions_in, planner_action_lengths, planner_hidden_index,  controller_img_feats,controller_actions_in, controller_action_lengths, planner_hidden=False):
 
         # ts = time.time()
         N_p, T_p, _ = planner_img_feats.size()
@@ -1161,7 +1145,7 @@ class NavPlannerControllerModel(nn.Module):
 
         img_feats = self.cnn_fc_layer(img_feats)
         actions_embed = self.planner_nav_rnn.action_embed(actions_in)
-
+        
         img_feats = img_feats.view(1, -1)
         actions_embed = actions_embed.view(1, -1)
         hidden_in = hidden_in.view(1, -1)

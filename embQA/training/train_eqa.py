@@ -470,7 +470,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
         'vocab': args.vocab_json,
         'target_obj_conn_map_dir': args.target_obj_conn_map_dir,
         'map_resolution': args.map_resolution,
-        'batch_size': 1,
+        'batch_size': 1,    # FOR REINFORCE!!!
         'input_type': args.model_type,
         'num_frames': 5,
         'split': 'train',
@@ -479,10 +479,8 @@ def train(rank, args, shared_nav_model, shared_ans_model):
         'to_cache': args.to_cache
     }
 
-    args.output_nav_log_path = os.path.join(args.log_dir,
-                                            'nav_train_' + str(rank) + '.json')
-    args.output_ans_log_path = os.path.join(args.log_dir,
-                                            'ans_train_' + str(rank) + '.json')
+    args.output_nav_log_path = os.path.join(args.log_dir,  'nav_train_' + str(rank) + '.json')
+    args.output_ans_log_path = os.path.join(args.log_dir, 'ans_train_' + str(rank) + '.json')
 
     nav_model.load_state_dict(shared_nav_model.state_dict())
     nav_model.cuda()
@@ -491,6 +489,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
     ans_model.eval()
     ans_model.cuda()
 
+    # Saty: add coverage metric here (Should be inculcated into the reward structure)
     nav_metrics = NavMetric(
         info={'split': 'train',
               'thread': rank},
@@ -557,28 +556,29 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     planner_hidden = nav_model.planner_nav_rnn.init_hidden(1)
 
                     # forward through planner till spawn
-                    (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, _ ) = train_loader.dataset.get_hierarchical_features_till_spawn(
+                    (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, _ ) = \
+                    train_loader.dataset.get_hierarchical_features_till_spawn(
                         actions[0, :action_length[0] + 1].numpy(),
                         max(3, int(mult * action_length[0])))
 
-                    planner_actions_in_var = Variable(
-                        planner_actions_in.cuda())
+                    planner_actions_in_var = Variable(planner_actions_in.cuda())
                     planner_img_feats_var = Variable(planner_img_feats.cuda())
-
+                    
+                    #  Sati: Run Planner till target_pos_idx -> This is from get_hierarchical_features... 
+                    # need T-1 hidden state for planner! -> GT img_feats, Actions and question!                   
                     for step in range(planner_actions_in.size(0)):
 
-                        planner_scores, planner_hidden = nav_model.planner_step(
-                            question_var, planner_img_feats_var[step].view(
-                                1, 1, 3200), planner_actions_in_var[step].view(
-                                    1, 1), planner_hidden)
+                        planner_scores, planner_hidden = \
+                        nav_model.planner_step(
+                            question_var,
+                            planner_img_feats_var[step].view(1, 1, 3200), 
+                            planner_actions_in_var[step].view(1, 1), 
+                            planner_hidden)
 
                     if controller_step == True:
 
-                        controller_img_feat_var = Variable(
-                            controller_img_feat.cuda())
-                        controller_action_in_var = Variable(
-                            torch.LongTensor(1, 1).fill_(
-                                int(controller_action_in)).cuda())
+                        controller_img_feat_var = Variable(controller_img_feat.cuda())
+                        controller_action_in_var = Variable(torch.LongTensor(1, 1).fill_(int(controller_action_in)).cuda())
 
                         controller_scores = nav_model.controller_step(
                             controller_img_feat_var.view(1, 1, 3200),
@@ -586,8 +586,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             planner_hidden[0])
 
                         prob = F.softmax(controller_scores, dim=1)
-                        controller_action = int(
-                            prob.max(1)[1].data.cpu().numpy()[0])
+                        controller_action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
                         if controller_action == 1:
                             controller_step = True
@@ -595,39 +594,33 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             controller_step = False
 
                         action = int(controller_action_in)
-                        action_in = torch.LongTensor(
-                            1, 1).fill_(action + 1).cuda()
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
 
                     else:
 
                         prob = F.softmax(planner_scores, dim=1)
                         action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
-                        action_in = torch.LongTensor(
-                            1, 1).fill_(action + 1).cuda()
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
 
-                    h3d.env.reset(
-                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
-                    init_dist_to_target = h3d.get_dist_to_target(
-                        h3d.env.cam.pos)
+                    init_dist_to_target = h3d.get_dist_to_target(h3d.env.cam.pos)
                     if init_dist_to_target < 0:  # unreachable
-                        # invalids.append([idx[0], i])
+                        invalids.append([idx[0], i])
                         continue
 
                     episode_length = 0
                     episode_done = True
                     controller_action_counter = 0
 
-                    dists_to_target, pos_queue = [init_dist_to_target], [
-                        init_pos
-                    ]
+                    dists_to_target, pos_queue = [init_dist_to_target], [init_pos]
 
                     rewards, planner_actions, planner_log_probs, controller_actions, controller_log_probs = [], [], [], [], []
 
                     if action != 3:
 
-                        # take the first step
+                        # take the first step -> Include coverage in reward!
                         img, rwd, episode_done = h3d.step(action, step_reward=True)
                         img = torch.from_numpy(img.transpose(
                             2, 0, 1)).float() / 255.0
@@ -642,7 +635,8 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                             if controller_step == False:
                                 planner_scores, planner_hidden = nav_model.planner_step(
                                     question_var, img_feat_var,
-                                    Variable(action_in), planner_hidden)
+                                    Variable(action_in), 
+                                    planner_hidden)
 
                                 planner_prob = F.softmax(planner_scores, dim=1)
                                 planner_log_prob = F.log_softmax(
@@ -763,8 +757,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                     optim.zero_grad()
 
-                    if isinstance(planner_loss, float) == False and isinstance(
-                            controller_loss, float) == False:
+                    if isinstance(planner_loss, float) == False and isinstance(controller_loss, float) == False:
                         p_losses.append(planner_loss.data[0, 0])
                         c_losses.append(controller_loss.data[0, 0])
                         reward_list.append(np.sum(rewards))

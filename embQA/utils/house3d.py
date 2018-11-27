@@ -143,7 +143,7 @@ class House3DUtils():
 
         elif action == 1:
             self.env.rotate(-self.rotation_sensitivity)
-            obs = self.env.render()
+            obs = self.env.render()  
 
         elif action == 2:
             self.env.rotate(self.rotation_sensitivity)
