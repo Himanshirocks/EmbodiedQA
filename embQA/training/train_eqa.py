@@ -28,6 +28,12 @@ from models import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab, flat_to_hierarchical_actions
 import cv2
 
+def oneHot(vec, dim):
+    batch_size = vec.size(0)
+    out = torch.zeros(batch_size, dim)
+    out[np.arange(batch_size), vec.long()] = 1
+    return out
+
 def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=0):
 
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
@@ -443,7 +449,6 @@ def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=
         eval_loader.dataset._load_envs(start_idx=0, in_order=True)
     return best_eval_acc
 
-
 def train(rank, args, shared_nav_model, shared_ans_model):
 
     torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
@@ -564,27 +569,34 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     planner_actions_in_var = Variable(planner_actions_in.cuda())
                     planner_img_feats_var = Variable(planner_img_feats.cuda())
                     
-                    #  Sati: Run Planner till target_pos_idx -> This is from get_hierarchical_features... 
+                    # Sati: Run Planner till target_pos_idx -> This is from get_hierarchical_features... 
                     # need T-1 hidden state for planner! -> GT img_feats, Actions and question!                   
                     for step in range(planner_actions_in.size(0)):
+
+                        # Sati: Make into one-Hot
+                        planner_actions_in_OH = oneHot(planner_actions_in_var[step].view(1,1), 4)
+
 
                         planner_scores, planner_hidden = \
                         nav_model.planner_step(
                             question_var,
                             planner_img_feats_var[step].view(1, 1, 3200), 
-                            planner_actions_in_var[step].view(1, 1), 
+                            planner_actions_in_OH, 
                             planner_hidden)
 
                     if controller_step == True:
 
                         controller_img_feat_var = Variable(controller_img_feat.cuda())
-                        controller_action_in_var = Variable(torch.LongTensor(1, 1).fill_(int(controller_action_in)).cuda())
+                        controller_action_in_var = torch.LongTensor(1, 1).fill_(int(controller_action_in)).cuda()
+
+                        controller_action_in_OH = Variable(oneHot(controller_action_in_var, 3).cuda())
 
                         controller_scores = nav_model.controller_step(
                             controller_img_feat_var.view(1, 1, 3200),
-                            controller_action_in_var.view(1, 1),
+                            controller_action_in_OH,
                             planner_hidden[0])
-
+                        import pdb; pdb.set_trace()
+                        
                         prob = F.softmax(controller_scores, dim=1)
                         controller_action = int(prob.max(1)[1].data.cpu().numpy()[0])
 

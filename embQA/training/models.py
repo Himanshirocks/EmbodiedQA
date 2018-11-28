@@ -1,1156 +1,1021 @@
-# Model defs for navigation and question answering
-# Navigation: CNN, LSTM, Planner-controller
-# VQA: question-only, 5-frame + attention
+# Copyright (c) Facebook, Inc. and its affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 
-import time
 import h5py
-import math
+import time
 import argparse
 import numpy as np
 import os, sys, json
-
-import torch
-import torchvision
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
+from tqdm import tqdm
 import pdb
 
+import torch
+import torch.nn.functional as F
+from torch.autograd import Variable
+torch.backends.cudnn.enabled = False
+import torch.multiprocessing as mp
 
-def build_mlp(input_dim,
-              hidden_dims,
-              output_dim,
-              use_batchnorm=False,
-              dropout=0,
-              add_sigmoid=1):
-    layers = []
-    D = input_dim
-    if dropout > 0:
-        layers.append(nn.Dropout(p=dropout))
-    if use_batchnorm:
-        layers.append(nn.BatchNorm1d(input_dim))
-    for dim in hidden_dims:
-        layers.append(nn.Linear(D, dim))
-        if use_batchnorm:
-            layers.append(nn.BatchNorm1d(dim))
-        if dropout > 0:
-            layers.append(nn.Dropout(p=dropout))
-        layers.append(nn.ReLU(inplace=True))
-        D = dim
-    layers.append(nn.Linear(D, output_dim))
+from models import NavCnnModel, NavCnnRnnModel, NavPlannerControllerModel, VqaLstmCnnAttentionModel
+from data import EqaDataset, EqaDataLoader
+from metrics import NavMetric, VqaMetric
 
-    if add_sigmoid == 1:
-        layers.append(nn.Sigmoid())
+from models import MaskedNLLCriterion
 
-    return nn.Sequential(*layers)
+from models import get_state, repackage_hidden, ensure_shared_grads
+from data import load_vocab, flat_to_hierarchical_actions
+import cv2
 
+def oneHot(vec, dim):
+    batch_size = vec.size(0)
+    out = torch.zeros(batch_size, dim)
+    out[np.arange(batch_size), vec.long()] = 1
+    return out
 
-def get_state(m):
-    if m is None:
-        return None
-    state = {}
-    for k, v in m.state_dict().items():
-        state[k] = v.clone()
-    return state
+def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=0):
 
+    torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
-def repackage_hidden(h, batch_size):
-    # wraps hidden states in new Variables, to detach them from their history
-    if type(h) == Variable:
-        return Variable(
-            h.data.resize_(h.size(0), batch_size, h.size(2)).zero_())
+    if args.model_type == 'pacman':
+
+        model_kwargs = {'question_vocab': load_vocab(args.vocab_json)}
+        nav_model = NavPlannerControllerModel(**model_kwargs)
+
     else:
-        return tuple(repackage_hidden(v, batch_size) for v in h)
-
-
-def ensure_shared_grads(model, shared_model):
-    for param, shared_param in zip(model.parameters(),
-                                   shared_model.parameters()):
-        if shared_param.grad is not None:
-            return
-        shared_param._grad = param.grad
-
-
-class MaskedNLLCriterion(nn.Module):
-    def __init__(self):
-        super(MaskedNLLCriterion, self).__init__()
-
-    def forward(self, input, target, mask):
-
-        logprob_select = torch.gather(input, 1, target)
-
-        out = torch.masked_select(logprob_select, mask)
-
-        loss = -torch.sum(out) / mask.float().sum()
-        return loss
-
-class MultitaskCNNOutput(nn.Module):
-    def __init__(
-            self,
-            num_classes=191,
-            pretrained=True,
-            checkpoint_path='models/03_13_h3d_hybrid_cnn.pt'
-    ):
-        super(MultitaskCNNOutput, self).__init__()
-
-        self.num_classes = num_classes
-        self.conv_block1 = nn.Sequential(
-            nn.Conv2d(3, 8, 5),
-            nn.BatchNorm2d(8),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block2 = nn.Sequential(
-            nn.Conv2d(8, 16, 5),
-            nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block3 = nn.Sequential(
-            nn.Conv2d(16, 32, 5),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block4 = nn.Sequential(
-            nn.Conv2d(32, 32, 5),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.classifier = nn.Sequential(
-            nn.Conv2d(32, 512, 5),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(),
-            nn.Conv2d(512, 512, 1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d())
-
-        self.encoder_seg = nn.Conv2d(512, self.num_classes, 1)
-        self.encoder_depth = nn.Conv2d(512, 1, 1)
-        self.encoder_ae = nn.Conv2d(512, 3, 1)
-
-        self.score_pool2_seg = nn.Conv2d(16, self.num_classes, 1)
-        self.score_pool3_seg = nn.Conv2d(32, self.num_classes, 1)
-
-        self.score_pool2_depth = nn.Conv2d(16, 1, 1)
-        self.score_pool3_depth = nn.Conv2d(32, 1, 1)
-
-        self.score_pool2_ae = nn.Conv2d(16, 3, 1)
-        self.score_pool3_ae = nn.Conv2d(32, 3, 1)
-
-        self.pretrained = pretrained
-        if self.pretrained == True:
-            print('Loading CNN weights from %s' % checkpoint_path)
-            checkpoint = torch.load(
-                checkpoint_path, map_location={'cuda:0': 'cpu'})
-            self.load_state_dict(checkpoint['model_state'])
-            for param in self.parameters():
-                param.requires_grad = False
-        else:
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    n = m.kernel_size[0] * m.kernel_size[1] * (
-                        m.out_channels + m.in_channels)
-                    m.weight.data.normal_(0, math.sqrt(2. / n))
-                elif isinstance(m, nn.BatchNorm2d):
-                    m.weight.data.fill_(1)
-                    m.bias.data.zero_()
-
-    def forward(self, x):
-
-        conv1 = self.conv_block1(x)
-        conv2 = self.conv_block2(conv1)
-        conv3 = self.conv_block3(conv2)
-        conv4 = self.conv_block4(conv3)
-
-        encoder_output = self.classifier(conv4)
-
-        encoder_output_seg = self.encoder_seg(encoder_output)
-        encoder_output_depth = self.encoder_depth(encoder_output)
-        encoder_output_ae = self.encoder_ae(encoder_output)
-
-        score_pool2_seg = self.score_pool2_seg(conv2)
-        score_pool3_seg = self.score_pool3_seg(conv3)
-
-        score_pool2_depth = self.score_pool2_depth(conv2)
-        score_pool3_depth = self.score_pool3_depth(conv3)
-
-        score_pool2_ae = self.score_pool2_ae(conv2)
-        score_pool3_ae = self.score_pool3_ae(conv3)
-
-        score_seg = F.upsample(encoder_output_seg, score_pool3_seg.size()[2:], mode='bilinear')
-        score_seg += score_pool3_seg
-        score_seg = F.upsample(score_seg, score_pool2_seg.size()[2:], mode='bilinear')
-        score_seg += score_pool2_seg
-        out_seg = F.upsample(score_seg, x.size()[2:], mode='bilinear')
-
-        score_depth = F.upsample(encoder_output_depth, score_pool3_depth.size()[2:], mode='bilinear')
-        score_depth += score_pool3_depth
-        score_depth = F.upsample(score_depth, score_pool2_depth.size()[2:], mode='bilinear')
-        score_depth += score_pool2_depth
-        out_depth = F.sigmoid(F.upsample(score_depth, x.size()[2:], mode='bilinear'))
-
-        score_ae = F.upsample(encoder_output_ae, score_pool3_ae.size()[2:], mode='bilinear')
-        score_ae += score_pool3_ae
-        score_ae = F.upsample(score_ae, score_pool2_ae.size()[2:], mode='bilinear')
-        score_ae += score_pool2_ae
-        out_ae = F.sigmoid(F.upsample(score_ae, x.size()[2:], mode='bilinear'))
-
-        return out_seg, out_depth, out_ae
-
-class MultitaskCNN(nn.Module):
-    def __init__(
-            self,
-            num_classes=191,
-            pretrained=True,
-            checkpoint_path='models/03_13_h3d_hybrid_cnn.pt'
-    ):
-        super(MultitaskCNN, self).__init__()
-
-        self.num_classes = num_classes
-        self.conv_block1 = nn.Sequential(
-            nn.Conv2d(3, 8, 5),
-            nn.BatchNorm2d(8),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block2 = nn.Sequential(
-            nn.Conv2d(8, 16, 5),
-            nn.BatchNorm2d(16),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block3 = nn.Sequential(
-            nn.Conv2d(16, 32, 5),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.conv_block4 = nn.Sequential(
-            nn.Conv2d(32, 32, 5),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2, 2))
-        self.classifier = nn.Sequential(
-            nn.Conv2d(32, 512, 5),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(),
-            nn.Conv2d(512, 512, 1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d())
-
-        self.encoder_seg = nn.Conv2d(512, self.num_classes, 1)
-        self.encoder_depth = nn.Conv2d(512, 1, 1)
-        self.encoder_ae = nn.Conv2d(512, 3, 1)
-
-        self.score_pool2_seg = nn.Conv2d(16, self.num_classes, 1)
-        self.score_pool3_seg = nn.Conv2d(32, self.num_classes, 1)
-
-        self.score_pool2_depth = nn.Conv2d(16, 1, 1)
-        self.score_pool3_depth = nn.Conv2d(32, 1, 1)
-
-        self.score_pool2_ae = nn.Conv2d(16, 3, 1)
-        self.score_pool3_ae = nn.Conv2d(32, 3, 1)
-
-        self.pretrained = pretrained
-        if self.pretrained == True:
-            print('Loading CNN weights from %s' % checkpoint_path)
-            checkpoint = torch.load(
-                checkpoint_path, map_location={'cuda:0': 'cpu'})
-            self.load_state_dict(checkpoint['model_state'])
-            for param in self.parameters():
-                param.requires_grad = False
-        else:
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    n = m.kernel_size[0] * m.kernel_size[1] * (
-                        m.out_channels + m.in_channels)
-                    m.weight.data.normal_(0, math.sqrt(2. / n))
-                elif isinstance(m, nn.BatchNorm2d):
-                    m.weight.data.fill_(1)
-                    m.bias.data.zero_()
-
-    def forward(self, x):
-
-        conv1 = self.conv_block1(x)
-        conv2 = self.conv_block2(conv1)
-        conv3 = self.conv_block3(conv2)
-        conv4 = self.conv_block4(conv3)
-
-        return conv4.view(-1, 32 * 10 * 10)
-
-        # encoder_output = self.classifier(conv4)
-
-        # encoder_output_seg = self.encoder_seg(encoder_output)
-        # encoder_output_depth = self.encoder_depth(encoder_output)
-        # encoder_output_ae = self.encoder_ae(encoder_output)
-
-        # score_pool2_seg = self.score_pool2_seg(conv2)
-        # score_pool3_seg = self.score_pool3_seg(conv3)
-
-        # score_pool2_depth = self.score_pool2_depth(conv2)
-        # score_pool3_depth = self.score_pool3_depth(conv3)
-
-        # score_pool2_ae = self.score_pool2_ae(conv2)
-        # score_pool3_ae = self.score_pool3_ae(conv3)
-
-        # score_seg = F.upsample(encoder_output_seg, score_pool3_seg.size()[2:], mode='bilinear')
-        # score_seg += score_pool3_seg
-        # score_seg = F.upsample(score_seg, score_pool2_seg.size()[2:], mode='bilinear')
-        # score_seg += score_pool2_seg
-        # out_seg = F.upsample(score_seg, x.size()[2:], mode='bilinear')
-
-        # score_depth = F.upsample(encoder_output_depth, score_pool3_depth.size()[2:], mode='bilinear')
-        # score_depth += score_pool3_depth
-        # score_depth = F.upsample(score_depth, score_pool2_depth.size()[2:], mode='bilinear')
-        # score_depth += score_pool2_depth
-        # out_depth = F.sigmoid(F.upsample(score_depth, x.size()[2:], mode='bilinear'))
-
-        # score_ae = F.upsample(encoder_output_ae, score_pool3_ae.size()[2:], mode='bilinear')
-        # score_ae += score_pool3_ae
-        # score_ae = F.upsample(score_ae, score_pool2_ae.size()[2:], mode='bilinear')
-        # score_ae += score_pool2_ae
-        # out_ae = F.sigmoid(F.upsample(score_ae, x.size()[2:], mode='bilinear'))
-
-        # return out_seg, out_depth, out_ae
-
-
-class QuestionLstmEncoder(nn.Module):
-    def __init__(self,
-                 token_to_idx,
-                 wordvec_dim=64,
-                 rnn_dim=64,
-                 rnn_num_layers=2,
-                 rnn_dropout=0):
-        super(QuestionLstmEncoder, self).__init__()
-        self.token_to_idx = token_to_idx
-        self.NULL = token_to_idx['<NULL>']
-        self.START = token_to_idx['<START>']
-        self.END = token_to_idx['<END>']
-
-        self.embed = nn.Embedding(len(token_to_idx), wordvec_dim)
-        print(self.embed)
-        self.rnn = nn.LSTM(
-            wordvec_dim,
-            rnn_dim,
-            rnn_num_layers,
-            dropout=rnn_dropout,
-            batch_first=True)
-
-        self.init_weights()
-
-    def init_weights(self):
-        initrange = 0.1
-        self.embed.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, x):
-        N, T = x.size()
-        idx = torch.LongTensor(N).fill_(T - 1)
-
-        # Find the last non-null element in each sequence
-        x_cpu = x.data.cpu()
-        for i in range(N):
-            for t in range(T - 1):
-                if x_cpu[i, t] != self.NULL and x_cpu[i, t + 1] == self.NULL:
-                    idx[i] = t
-                    break
-        idx = idx.type_as(x.data).long()
-        idx = Variable(idx, requires_grad=False)
-
-        hs, _ = self.rnn(self.embed(x))
-
-        idx = idx.view(N, 1, 1).expand(N, 1, hs.size(2))
-        H = hs.size(2)
-        return hs.gather(1, idx).view(N, H)
-
-
-# ----------- VQA -----------
-
-
-class VqaLstmModel(nn.Module):
-    def __init__(self,
-                 vocab,
-                 rnn_wordvec_dim=64,
-                 rnn_dim=64,
-                 rnn_num_layers=2,
-                 rnn_dropout=0.5,
-                 fc_use_batchnorm=False,
-                 fc_dropout=0.5,
-                 fc_dims=(64, )):
-        super(VqaLstmModel, self).__init__()
-        rnn_kwargs = {
-            'token_to_idx': vocab['questionTokenToIdx'],
-            'wordvec_dim': rnn_wordvec_dim,
-            'rnn_dim': rnn_dim,
-            'rnn_num_layers': rnn_num_layers,
-            'rnn_dropout': rnn_dropout,
-        }
-        self.rnn = QuestionLstmEncoder(**rnn_kwargs)
-
-        classifier_kwargs = {
-            'input_dim': rnn_dim,
-            'hidden_dims': fc_dims,
-            'output_dim': len(vocab['answerTokenToIdx']),
-            'use_batchnorm': fc_use_batchnorm,
-            'dropout': fc_dropout,
-            'add_sigmoid': 0
-        }
-        self.classifier = build_mlp(**classifier_kwargs)
-
-    def forward(self, questions):
-        q_feats = self.rnn(questions)
-        scores = self.classifier(q_feats)
-        return scores
-
-
-class VqaLstmCnnAttentionModel(nn.Module):
-    def __init__(self,
-                 vocab,
-                 image_feat_dim=64,
-                 question_wordvec_dim=64,
-                 question_hidden_dim=64,
-                 question_num_layers=2,
-                 question_dropout=0.5,
-                 fc_use_batchnorm=False,
-                 fc_dropout=0.5,
-                 fc_dims=(64, )):
-        super(VqaLstmCnnAttentionModel, self).__init__()
-
-        cnn_kwargs = {'num_classes': 191, 'pretrained': True}
-        self.cnn = MultitaskCNN(**cnn_kwargs)
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, 64), nn.ReLU(), nn.Dropout(p=0.5))
-
-        q_rnn_kwargs = {
-            'token_to_idx': vocab['questionTokenToIdx'],
-            'wordvec_dim': question_wordvec_dim,
-            'rnn_dim': question_hidden_dim,
-            'rnn_num_layers': question_num_layers,
-            'rnn_dropout': question_dropout,
-        }
-        self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-
-        self.img_tr = nn.Sequential(nn.Linear(64, 64), nn.Dropout(p=0.5))
-
-        self.ques_tr = nn.Sequential(nn.Linear(64, 64), nn.Dropout(p=0.5))
-
-        classifier_kwargs = {
-            'input_dim': 64,
-            'hidden_dims': fc_dims,
-            'output_dim': len(vocab['answerTokenToIdx']),
-            'use_batchnorm': fc_use_batchnorm,
-            'dropout': fc_dropout,
-            'add_sigmoid': 0
-        }
-        self.classifier = build_mlp(**classifier_kwargs)
-
-        self.att = nn.Sequential(
-            nn.Tanh(), nn.Dropout(p=0.5), nn.Linear(128, 1))
-
-    def forward(self, images, questions):
-
-        N, T, _, _, _ = images.size()
-
-        # bs x 5 x 3 x 224 x 224
-        img_feats = self.cnn(images.contiguous().view(
-            -1, images.size(2), images.size(3), images.size(4)))
-        img_feats = self.cnn_fc_layer(img_feats)
-
-        img_feats_tr = self.img_tr(img_feats)
-
-        ques_feats = self.q_rnn(questions)
-        ques_feats_repl = ques_feats.view(N, 1, -1).repeat(1, T, 1)
-        ques_feats_repl = ques_feats_repl.view(N * T, -1)
-
-        ques_feats_tr = self.ques_tr(ques_feats_repl)
-
-        ques_img_feats = torch.cat([ques_feats_tr, img_feats_tr], 1)
-
-        att_feats = self.att(ques_img_feats)
-        att_probs = F.softmax(att_feats.view(N, T), dim=1)
-        att_probs2 = att_probs.view(N, T, 1).repeat(1, 1, 64)
-
-        att_img_feats = torch.mul(att_probs2, img_feats.view(N, T, 64))
-        att_img_feats = torch.sum(att_img_feats, dim=1)
-
-        mul_feats = torch.mul(ques_feats, att_img_feats)
-
-        scores = self.classifier(mul_feats)
-
-        return scores, att_probs
-
-
-# ----------- Nav -----------
-
-
-class NavCnnModel(nn.Module):
-    def __init__(self,
-                 num_frames=5,
-                 num_actions=4,
-                 question_input=False,
-                 question_vocab=False,
-                 question_wordvec_dim=64,
-                 question_hidden_dim=64,
-                 question_num_layers=2,
-                 question_dropout=0.5,
-                 fc_use_batchnorm=False,
-                 fc_dropout=0.5,
-                 fc_dims=(64, )):
-        super(NavCnnModel, self).__init__()
-
-        # cnn_kwargs = {'num_classes': 191, 'pretrained': True}
-        # self.cnn = MultitaskCNN(**cnn_kwargs)
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, 64), nn.ReLU(), nn.Dropout(p=0.5))
-
-        self.question_input = question_input
-        if self.question_input == True:
-            q_rnn_kwargs = {
-                'token_to_idx': question_vocab['questionTokenToIdx'],
-                'wordvec_dim': question_wordvec_dim,
-                'rnn_dim': question_hidden_dim,
-                'rnn_num_layers': question_num_layers,
-                'rnn_dropout': question_dropout,
-            }
-            self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-            self.ques_tr = nn.Sequential(
-                nn.Linear(64, 64), nn.ReLU(), nn.Dropout(p=0.5))
-
-        classifier_kwargs = {
-            'input_dim': 64 * num_frames + self.question_input * 64,
-            'hidden_dims': fc_dims,
-            'output_dim': num_actions,
-            'use_batchnorm': fc_use_batchnorm,
-            'dropout': fc_dropout,
-            'add_sigmoid': 0
-        }
-        self.classifier = build_mlp(**classifier_kwargs)
-
-    # batch forward, for supervised learning
-    def forward(self, img_feats, questions=None):
-
-        # bs x 5 x 3200
-        N, T, _ = img_feats.size()
-
-        img_feats = self.cnn_fc_layer(img_feats)
-
-        img_feats = img_feats.view(N, T, -1)
-        img_feats = img_feats.view(N, -1)
-
-        if self.question_input == True:
-            ques_feats = self.q_rnn(questions)
-            ques_feats = self.ques_tr(ques_feats)
-
-            img_feats = torch.cat([ques_feats, img_feats], 1)
-
-        scores = self.classifier(img_feats)
-
-        return scores
-
-class NavRnnMult(nn.Module):
-    def __init__(self,
-                 image_input=False,
-                 image_feat_dim=128,
-                 question_input=False,
-                 question_embed_dim=128,
-                 action_input=False,
-                 action_embed_dim=32,
-                 num_actions=4,
-                 mode='sl',
-                 rnn_type='LSTM',
-                 rnn_hidden_dim=128,
-                 rnn_num_layers=2,
-                 rnn_dropout=0,
-                 return_states=False):
-        super(NavRnnMult, self).__init__()
-
-        self.image_input = image_input
-        self.image_feat_dim = image_feat_dim
-
-        self.question_input = question_input
-        self.question_embed_dim = question_embed_dim
-
-        self.action_input = action_input
-        self.action_embed_dim = action_embed_dim
-
-        self.num_actions = num_actions
-
-        self.rnn_type = rnn_type
-        self.rnn_hidden_dim = rnn_hidden_dim
-        self.rnn_num_layers = rnn_num_layers
-
-        self.return_states = return_states
-
-        rnn_input_dim = 0
-        if self.image_input == True:
-            rnn_input_dim += image_feat_dim
-            print('Adding input to %s: image, rnn dim: %d' % (self.rnn_type,
-                                                              rnn_input_dim))
-
-        if self.question_input == True:
-            #rnn_input_dim += question_embed_dim
-            print('Adding input to %s: question, rnn dim: %d' %
-                  (self.rnn_type, rnn_input_dim))
-
-        if self.action_input == True:
-            self.action_embed = nn.Embedding(num_actions, action_embed_dim)
-            rnn_input_dim += action_embed_dim
-            print('Adding input to %s: action, rnn dim: %d' % (self.rnn_type,
-                                                               rnn_input_dim))
-
-        self.rnn = getattr(nn, self.rnn_type)(
-            rnn_input_dim,
-            self.rnn_hidden_dim,
-            self.rnn_num_layers,
-            dropout=rnn_dropout,
-            batch_first=True)
-        print('Building %s with hidden dim: %d' % (self.rnn_type,
-                                                   rnn_hidden_dim))
-
-        self.decoder = nn.Linear(self.rnn_hidden_dim, self.num_actions)
-
-    def init_hidden(self, bsz):
-        weight = next(self.parameters()).data
-        if self.rnn_type == 'LSTM':
-            return (Variable(
-                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                .zero_()), Variable(
-                    weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                    .zero_()))
-        elif self.rnn_type == 'GRU':
-            return Variable(
-                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                .zero_())
-
-    def forward(self,img_feats,question_feats,actions_in,action_lengths,hidden=False):
-        input_feats = Variable()
-
-        T = False
-        if self.image_input == True:
-            N, T, _ = img_feats.size()
-            input_feats = img_feats
-
-        if self.question_input == True:
-            N, D = question_feats.size()
-            question_feats = question_feats.view(N, 1, D)
-            if T == False:
-                T = actions_in.size(1)
-            question_feats = question_feats.repeat(1, T, 1)
-            if len(input_feats) == 0:
-                input_feats = question_feats
-            else:
-                #input_feats = torch.cat([input_feats, question_feats], 2)
-                input_feats = torch.mul(input_feats, question_feats)
-
-        if self.action_input == True:
-            if len(input_feats) == 0:
-                input_feats = self.action_embed(actions_in)
-            else:
-                input_feats = torch.cat(
-                    [input_feats, self.action_embed(actions_in)], 2)
-
-        packed_input_feats = pack_padded_sequence(
-            input_feats, action_lengths, batch_first=True)
-        packed_output, hidden = self.rnn(packed_input_feats)
-        rnn_output, _ = pad_packed_sequence(packed_output, batch_first=True)
-        output = self.decoder(rnn_output.contiguous().view(
-            rnn_output.size(0) * rnn_output.size(1), rnn_output.size(2)))
-
-        if self.return_states == True:
-            return rnn_output, output, hidden
-        else:
-            return output, hidden
-
-    def step_forward(self, img_feats, question_feats, actions_in, hidden):
-        input_feats = Variable()
-
-        T = False
-        if self.image_input == True:
-            N, T, _ = img_feats.size()
-            input_feats = img_feats
-
-        if self.question_input == True:
-            N, D = question_feats.size()
-            question_feats = question_feats.view(N, 1, D)
-            if T == False:
-                T = actions_in.size(1)
-            
-            question_feats = question_feats.repeat(1, T, 1)
-            if len(input_feats) == 0:
-                input_feats = question_feats
-            else:
-                #input_feats = torch.cat([input_feats, question_feats], 2)
-                input_feats = torch.mul(input_feats, question_feats)
-
-        if self.action_input == True:
-            if len(input_feats) == 0:
-                input_feats = self.action_embed(actions_in)
-            else:
-                input_feats = torch.cat(
-                    [input_feats, self.action_embed(actions_in)], 2)
-
-        output, hidden = self.rnn(input_feats, hidden)
-
-        output = self.decoder(output.contiguous().view(
-            output.size(0) * output.size(1), output.size(2)))
-
-        return output, hidden
-
-class NavRnn(nn.Module):
-    def __init__(self,
-                 image_input=False,
-                 image_feat_dim=128,
-                 question_input=False,
-                 question_embed_dim=128,
-                 action_input=False,
-                 action_embed_dim=32,
-                 num_actions=4,
-                 mode='sl',
-                 rnn_type='LSTM',
-                 rnn_hidden_dim=128,
-                 rnn_num_layers=2,
-                 rnn_dropout=0,
-                 return_states=False):
-        super(NavRnn, self).__init__()
-
-        self.image_input = image_input
-        self.image_feat_dim = image_feat_dim
-
-        self.question_input = question_input
-        self.question_embed_dim = question_embed_dim
-
-        self.action_input = action_input
-        self.action_embed_dim = action_embed_dim
-
-        self.num_actions = num_actions
-
-        self.rnn_type = rnn_type
-        self.rnn_hidden_dim = rnn_hidden_dim
-        self.rnn_num_layers = rnn_num_layers
-
-        self.return_states = return_states
-
-        rnn_input_dim = 0
-        if self.image_input == True:
-            rnn_input_dim += image_feat_dim
-            print('Adding input to %s: image, rnn dim: %d' % (self.rnn_type,
-                                                              rnn_input_dim))
-
-        if self.question_input == True:
-            rnn_input_dim += question_embed_dim
-            print('Adding input to %s: question, rnn dim: %d' %
-                  (self.rnn_type, rnn_input_dim))
-
-        if self.action_input == True:
-            self.action_embed = nn.Embedding(num_actions, action_embed_dim)
-            rnn_input_dim += action_embed_dim
-            print('Adding input to %s: action, rnn dim: %d' % (self.rnn_type,
-                                                               rnn_input_dim))
-
-        self.rnn = getattr(nn, self.rnn_type)(
-            rnn_input_dim,
-            self.rnn_hidden_dim,
-            self.rnn_num_layers,
-            dropout=rnn_dropout,
-            batch_first=True)
-        print('Building %s with hidden dim: %d' % (self.rnn_type,
-                                                   rnn_hidden_dim))
-
-        self.decoder = nn.Linear(self.rnn_hidden_dim, self.num_actions)
-
-    def init_hidden(self, bsz):
-        weight = next(self.parameters()).data
-        if self.rnn_type == 'LSTM':
-            return (Variable(
-                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                .zero_()), Variable(
-                    weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                    .zero_()))
-        elif self.rnn_type == 'GRU':
-            return Variable(
-                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
-                .zero_())
-
-    def forward(self, img_feats, question_feats, actions_in,  action_lengths, hidden=False):
-        input_feats = Variable()
-
-        T = False
-        if self.image_input == True:
-            N, T, _ = img_feats.size()
-            input_feats = img_feats
-
-        if self.question_input == True:
-            N, D = question_feats.size()
-            question_feats = question_feats.view(N, 1, D)
-            if T == False:
-                T = actions_in.size(1)
-            question_feats = question_feats.repeat(1, T, 1)
-            if len(input_feats) == 0:
-                input_feats = question_feats
-            else:
-                input_feats = torch.cat([input_feats, question_feats], 2)
-
-        if self.action_input == True:
-            if len(input_feats) == 0:
-                input_feats = self.action_embed(actions_in)
-            else:
-                input_feats = torch.cat(
-                    [input_feats, self.action_embed(actions_in)], 2)
-
-        packed_input_feats = pack_padded_sequence(
-            input_feats, action_lengths, batch_first=True)
-        packed_output, hidden = self.rnn(packed_input_feats)
-        rnn_output, _ = pad_packed_sequence(packed_output, batch_first=True)
-        output = self.decoder(rnn_output.contiguous().view(
-            rnn_output.size(0) * rnn_output.size(1), rnn_output.size(2)))
-
-        if self.return_states == True:
-            return rnn_output, output, hidden
-        else:
-            return output, hidden
-
-    def step_forward(self, img_feats, question_feats, actions_in, hidden):
-        input_feats = Variable()
-
-        T = False
-        if self.image_input == True:
-            N, T, _ = img_feats.size()
-            input_feats = img_feats
-
-        if self.question_input == True:
-            N, D = question_feats.size()
-            question_feats = question_feats.view(N, 1, D)
-            
-            if T == False:
-                T = actions_in.size(1)
-            
-            question_feats = question_feats.repeat(1, T, 1)
-            
-            if len(input_feats) == 0:
-                input_feats = question_feats
-            else:
-                input_feats = torch.cat([input_feats, question_feats], 2)
-
-        if self.action_input == True:
-            if len(input_feats) == 0:
-                input_feats = self.action_embed(actions_in)
-            else:
-                input_feats = torch.cat(
-                    [input_feats, self.action_embed(actions_in)], 2)
-
-        output, hidden = self.rnn(input_feats, hidden)
-
-        output = self.decoder(output.contiguous().view(
-            output.size(0) * output.size(1), output.size(2)))
-
-        return output, hidden
-
-class NavCnnRnnMultModel(nn.Module):
-    def __init__(
-            self,
-            num_output=4,  # forward, left, right, stop
-            rnn_image_input=True,
-            rnn_image_feat_dim=128,
-            question_input=False,
-            question_vocab=False,
-            question_wordvec_dim=64,
-            question_hidden_dim=64,
-            question_num_layers=2,
-            question_dropout=0.5,
-            rnn_question_embed_dim=128,
-            rnn_action_input=True,
-            rnn_action_embed_dim=32,
-            rnn_type='LSTM',
-            rnn_hidden_dim=1024,
-            rnn_num_layers=1,
-            rnn_dropout=0):
-        super(NavCnnRnnMultModel, self).__init__()
-
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, rnn_image_feat_dim),
-            nn.ReLU(),
-            nn.Dropout(p=0.5))
-
-        self.rnn_hidden_dim = rnn_hidden_dim
-
-        self.question_input = question_input
-        if self.question_input == True:
-            q_rnn_kwargs = {
-                'token_to_idx': question_vocab['questionTokenToIdx'],
-                'wordvec_dim': question_wordvec_dim,
-                'rnn_dim': question_hidden_dim,
-                'rnn_num_layers': question_num_layers,
-                'rnn_dropout': question_dropout,
-            }
-            self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-            self.ques_tr = nn.Sequential(
-                nn.Linear(64, rnn_image_feat_dim), nn.ReLU(), nn.Dropout(p=0.5))
-
-        self.nav_rnn = NavRnnMult(
-            image_input=rnn_image_input,
-            image_feat_dim=rnn_image_feat_dim,
-            question_input=question_input,
-            question_embed_dim=question_hidden_dim,
-            action_input=rnn_action_input,
-            action_embed_dim=rnn_action_embed_dim,
-            num_actions=num_output,
-            rnn_type=rnn_type,
-            rnn_hidden_dim=rnn_hidden_dim,
-            rnn_num_layers=rnn_num_layers,
-            rnn_dropout=rnn_dropout)
-
-    def forward(self,
-                img_feats,
-                questions,
-                actions_in,
-                action_lengths,
-                hidden=False,
-                step=False):
-        N, T, _ = img_feats.size()
-
-        # B x T x 128
-        img_feats = self.cnn_fc_layer(img_feats)
-
-        if self.question_input == True:
-            ques_feats = self.q_rnn(questions)
-            ques_feats = self.ques_tr(ques_feats)
-
-            if step == True:
-                output, hidden = self.nav_rnn.step_forward(
-                    img_feats, ques_feats, actions_in, hidden)
-            else:
-                output, hidden = self.nav_rnn(img_feats, ques_feats,
-                                              actions_in, action_lengths)
-        else:
-            if step == True:
-                output, hidden = self.nav_rnn.step_forward(
-                    img_feats, False, actions_in, hidden)
-            else:
-                output, hidden = self.nav_rnn(img_feats, False, actions_in,
-                                              action_lengths)
-
-        return output, hidden
-
-class NavCnnRnnModel(nn.Module):
-    def __init__(
-            self,
-            num_output=4,  # forward, left, right, stop
-            rnn_image_input=True,
-            rnn_image_feat_dim=128,
-            question_input=False,
-            question_vocab=False,
-            question_wordvec_dim=64,
-            question_hidden_dim=64,
-            question_num_layers=2,
-            question_dropout=0.5,
-            rnn_question_embed_dim=128,
-            rnn_action_input=True,
-            rnn_action_embed_dim=32,
-            rnn_type='LSTM',
-            rnn_hidden_dim=1024,
-            rnn_num_layers=1,
-            rnn_dropout=0):
-        super(NavCnnRnnModel, self).__init__()
-
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, rnn_image_feat_dim),
-            nn.ReLU(),
-            nn.Dropout(p=0.5))
-
-        self.rnn_hidden_dim = rnn_hidden_dim
-
-        self.question_input = question_input
-        if self.question_input == True:
-            q_rnn_kwargs = {
-                'token_to_idx': question_vocab['questionTokenToIdx'],
-                'wordvec_dim': question_wordvec_dim,
-                'rnn_dim': question_hidden_dim,
-                'rnn_num_layers': question_num_layers,
-                'rnn_dropout': question_dropout,
-            }
-            self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-            self.ques_tr = nn.Sequential(
-                nn.Linear(64, 64), nn.ReLU(), nn.Dropout(p=0.5))
-
-        self.nav_rnn = NavRnn(
-            image_input=rnn_image_input,
-            image_feat_dim=rnn_image_feat_dim,
-            question_input=question_input,
-            question_embed_dim=question_hidden_dim,
-            action_input=rnn_action_input,
-            action_embed_dim=rnn_action_embed_dim,
-            num_actions=num_output,
-            rnn_type=rnn_type,
-            rnn_hidden_dim=rnn_hidden_dim,
-            rnn_num_layers=rnn_num_layers,
-            rnn_dropout=rnn_dropout)
-
-    def forward(self,
-                img_feats,
-                questions,
-                actions_in,
-                action_lengths,
-                hidden=False,
-                step=False):
-        N, T, _ = img_feats.size()
-
-        # B x T x 128
-        img_feats = self.cnn_fc_layer(img_feats)
-
-        if self.question_input == True:
-            ques_feats = self.q_rnn(questions)
-            ques_feats = self.ques_tr(ques_feats)
-
-            if step == True:
-                output, hidden = self.nav_rnn.step_forward(
-                    img_feats, ques_feats, actions_in, hidden)
-            else:
-                output, hidden = self.nav_rnn(img_feats, ques_feats,
-                                              actions_in, action_lengths)
-        else:
-            if step == True:
-                output, hidden = self.nav_rnn.step_forward(
-                    img_feats, False, actions_in, hidden)
-            else:
-                output, hidden = self.nav_rnn(img_feats, False, actions_in,
-                                              action_lengths)
-
-        return output, hidden
-
-class NavPlannerControllerModel(nn.Module):
-    def __init__(self,
-                 question_vocab,
-                 num_output=4,
-                 question_wordvec_dim=64,
-                 question_hidden_dim=64,
-                 question_num_layers=2,
-                 question_dropout=0.5,
-                 planner_rnn_image_feat_dim=128,
-                 planner_rnn_action_embed_dim=32,
-                 planner_rnn_type='GRU',
-                 planner_rnn_hidden_dim=1024,
-                 planner_rnn_num_layers=1,
-                 planner_rnn_dropout=0,
-                 controller_fc_dims=(256, )):
-        super(NavPlannerControllerModel, self).__init__()
-
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, planner_rnn_image_feat_dim),
-            nn.ReLU(),
-            nn.Dropout(p=0.5))
-
-        q_rnn_kwargs = {
-            'token_to_idx': question_vocab['questionTokenToIdx'],
-            'wordvec_dim': question_wordvec_dim,
-            'rnn_dim': question_hidden_dim,
-            'rnn_num_layers': question_num_layers,
-            'rnn_dropout': question_dropout,
-        }
-        self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-        # Saty: Fine tunes Question embedding obtained from the question LSTM Encoder. Ue GRU, here instead?
-        # we aren't concerned about the cell state, are we? 
-        self.ques_tr = nn.Sequential(
-            nn.Linear(question_hidden_dim, question_hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(p=0.5))
-
-        self.planner_nav_rnn = NavRnn(
-            image_input=True,
-            image_feat_dim=planner_rnn_image_feat_dim,
-            question_input=True,
-            question_embed_dim=question_hidden_dim,
-            action_input=True,
-            action_embed_dim=planner_rnn_action_embed_dim,
-            num_actions=num_output,
-            rnn_type=planner_rnn_type,
-            rnn_hidden_dim=planner_rnn_hidden_dim,
-            rnn_num_layers=planner_rnn_num_layers,
-            rnn_dropout=planner_rnn_dropout,
-            return_states=True)
-
-        controller_kwargs = {
-            'input_dim':
-            planner_rnn_image_feat_dim + planner_rnn_action_embed_dim +
-            planner_rnn_hidden_dim,
-            'hidden_dims':
-            controller_fc_dims,
-            'output_dim':
-            2,
-            'add_sigmoid':
-            0
-        }
-        self.controller = build_mlp(**controller_kwargs)
-
-    def forward(self,questions,planner_img_feats,  planner_actions_in, planner_action_lengths, planner_hidden_index,  controller_img_feats,controller_actions_in, controller_action_lengths, planner_hidden=False):
-
-        # ts = time.time()
-        N_p, T_p, _ = planner_img_feats.size()
-
-        planner_img_feats = self.cnn_fc_layer(planner_img_feats)
-        controller_img_feats = self.cnn_fc_layer(controller_img_feats)
-
-        ques_feats = self.q_rnn(questions)
-        ques_feats = self.ques_tr(ques_feats)
-
-        planner_states, planner_scores, planner_hidden = self.planner_nav_rnn(
-            planner_img_feats, ques_feats, planner_actions_in,
-            planner_action_lengths)
-
-        planner_hidden_index = planner_hidden_index[:, :
-                                                    controller_action_lengths.
-                                                    max()]
-        controller_img_feats = controller_img_feats[:, :
-                                                    controller_action_lengths.
-                                                    max()]
-        controller_actions_in = controller_actions_in[:, :
-                                                      controller_action_lengths.
-                                                      max()]
-
-        N_c, T_c, _ = controller_img_feats.size()
-
-        assert planner_hidden_index.max().data[0] < planner_states.size(1)
-
-        planner_hidden_index = planner_hidden_index.contiguous().view(
-            N_p, planner_hidden_index.size(1), 1).repeat(
-                1, 1, planner_states.size(2))
-
-        controller_hidden_in = planner_states.gather(1, planner_hidden_index)
-        controller_hidden_in = controller_hidden_in.view(
-            N_c * T_c, controller_hidden_in.size(2))
-
-        controller_img_feats = controller_img_feats.contiguous().view(
-            N_c * T_c, -1)
-        controller_actions_embed = self.planner_nav_rnn.action_embed(
-            controller_actions_in).view(N_c * T_c, -1)
-
-        controller_in = torch.cat([
-            controller_img_feats, controller_actions_embed,
-            controller_hidden_in
-        ], 1)
-        controller_scores = self.controller(controller_in)
-
-        return planner_scores, controller_scores, planner_hidden
-
-    def planner_step(self, questions, img_feats, actions_in, planner_hidden):
-
-        img_feats = self.cnn_fc_layer(img_feats)
-        ques_feats = self.q_rnn(questions)
-        ques_feats = self.ques_tr(ques_feats)
-        planner_scores, planner_hidden = self.planner_nav_rnn.step_forward(
-            img_feats, ques_feats, actions_in, planner_hidden)
-
-        return planner_scores, planner_hidden
-
-    def controller_step(self, img_feats, actions_in, hidden_in):
-
-        img_feats = self.cnn_fc_layer(img_feats)
-        actions_embed = self.planner_nav_rnn.action_embed(actions_in)
-        
-        img_feats = img_feats.view(1, -1)
-        actions_embed = actions_embed.view(1, -1)
-        hidden_in = hidden_in.view(1, -1)
-
-        controller_in = torch.cat([img_feats, actions_embed, hidden_in], 1)
-        controller_scores = self.controller(controller_in)
-
-        return controller_scores
+
+        exit()
+
+    model_kwargs = {'vocab': load_vocab(args.vocab_json)}
+    ans_model = VqaLstmCnnAttentionModel(**model_kwargs)
+
+    eval_loader_kwargs = {
+        'questions_h5': getattr(args, args.eval_split + '_h5'),
+        'data_json': args.data_json,
+        'vocab': args.vocab_json,
+        'target_obj_conn_map_dir': args.target_obj_conn_map_dir,
+        'map_resolution': args.map_resolution,
+        'batch_size': 1,
+        'input_type': args.model_type,
+        'num_frames': 5,
+        'split': args.eval_split,
+        'max_threads_per_gpu': args.max_threads_per_gpu,
+        'gpu_id': args.gpus[rank % len(args.gpus)],
+        'to_cache': False
+    }
+
+    eval_loader = EqaDataLoader(**eval_loader_kwargs)
+    print('eval_loader has %d samples' % len(eval_loader.dataset))
+
+    args.output_nav_log_path = os.path.join(args.log_dir,
+                                            'nav_eval_' + str(rank) + '.json')
+    args.output_ans_log_path = os.path.join(args.log_dir,
+                                            'ans_eval_' + str(rank) + '.json')
+
+    t, epoch = 0, 0
+
+    while epoch < int(args.max_epochs): #Himi changes
+        print('###############################')
+        print('[eval] Epoch is:', epoch)
+        print('###############################')
+
+        start_time = time.time()
+        invalids = []
+
+        nav_model.load_state_dict(shared_nav_model.state_dict())
+        nav_model.eval()
+
+        ans_model.load_state_dict(shared_ans_model.state_dict())
+        ans_model.eval()
+        ans_model.cuda()
+
+        # that's a lot of numbers
+        nav_metrics = NavMetric(
+            info={'split': args.eval_split,
+                  'thread': rank},
+            metric_names=[
+                'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
+                'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
+                'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
+                'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
+                'ep_len_30', 'ep_len_50'
+            ],
+            log_json=args.output_nav_log_path)
+
+        vqa_metrics = VqaMetric(
+            info={'split': args.eval_split,
+                  'thread': rank},
+            metric_names=[
+                'accuracy_10', 'accuracy_30', 'accuracy_50', 'mean_rank_10',
+                'mean_rank_30', 'mean_rank_50', 'mean_reciprocal_rank_10',
+                'mean_reciprocal_rank_30', 'mean_reciprocal_rank_50'
+            ],
+            log_json=args.output_ans_log_path)
+
+        if 'pacman' in args.model_type:
+            print('[eval] In If Pacman Condition')
+            done = False
+
+            while done == False:
+
+                for batch in tqdm(eval_loader):
+
+                    nav_model.load_state_dict(shared_nav_model.state_dict())
+                    nav_model.eval()
+                    nav_model.cuda()
+
+                    idx, question, answer, actions, action_length = batch
+                    metrics_slug = {}
+                    print('question is: ', question)
+                    print('answer is: ', answer)
+                    h3d = eval_loader.dataset.episode_house
+                    
+                    ##########
+                    #Sai analysis
+                    # pdb.set_trace()
+                    #print("Question idx ",idx)
+                    if 364909 in idx:
+                        pass
+                        #print("Question changed")
+                        #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                    else:
+                        print("Question idx ",idx)
+                        #print("not the selected question")
+                        #sys.exit(1)
+                    ##########
+                    
+                    # evaluate at multiple initializations
+                    for i in [10, 30, 50]:
+
+                        t += 1
+
+                        if i > action_length[0]:
+                            invalids.append([idx[0], i])
+                            continue
+
+                        question_var = Variable(question.cuda())
+
+                        controller_step = False
+                        planner_hidden = nav_model.planner_nav_rnn.init_hidden(
+                            1)
+
+                        # forward through planner till spawn
+                        (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, controller_action_counter) = eval_loader.dataset.get_hierarchical_features_till_spawn(
+                            actions[0, :action_length[0] + 1].numpy(), i)
+
+                        planner_actions_in_var = Variable(
+                            planner_actions_in.cuda())
+                        planner_img_feats_var = Variable(
+                            planner_img_feats.cuda())
+
+                        for step in range(planner_actions_in.size(0)):
+
+                            planner_scores, planner_hidden = nav_model.planner_step(
+                                question_var, planner_img_feats_var[step].view(
+                                    1, 1,
+                                    3200), planner_actions_in_var[step].view(
+                                        1, 1), planner_hidden)
+
+                        if controller_step == True:
+
+                            controller_img_feat_var = Variable(
+                                controller_img_feat.cuda())
+                            controller_action_in_var = Variable(
+                                torch.LongTensor(1, 1).fill_(
+                                    int(controller_action_in)).cuda())
+
+                            controller_scores = nav_model.controller_step(
+                                controller_img_feat_var.view(1, 1, 3200),
+                                controller_action_in_var.view(1, 1),
+                                planner_hidden[0])
+
+                            prob = F.softmax(controller_scores, dim=1)
+                            controller_action = int(
+                                prob.max(1)[1].data.cpu().numpy()[0])
+
+                            if controller_action == 1:
+                                controller_step = True
+                            else:
+                                controller_step = False
+
+                            action = int(controller_action_in)
+                            action_in = torch.LongTensor(
+                                1, 1).fill_(action + 1).cuda()
+
+                        else:
+
+                            prob = F.softmax(planner_scores, dim=1)
+                            action = int(prob.max(1)[1].data.cpu().numpy()[0])
+
+                            action_in = torch.LongTensor(
+                                1, 1).fill_(action + 1).cuda()
+
+                        h3d.env.reset(
+                            x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+
+                        init_dist_to_target = h3d.get_dist_to_target(
+                            h3d.env.cam.pos)
+                        if init_dist_to_target < 0:  # unreachable
+                            invalids.append([idx[0], i])
+                            continue
+
+                        episode_length = 0
+                        episode_done = True
+                        controller_action_counter = 0
+
+                        dists_to_target, pos_queue, pred_actions = [
+                            init_dist_to_target
+                        ], [init_pos], []
+                        planner_actions, controller_actions = [], []
+
+                        if action != 3:
+
+                            # take the first step
+                            img, _, _ = h3d.step(action)
+                            img = torch.from_numpy(img.transpose(
+                                2, 0, 1)).float() / 255.0
+                            img_feat_var = eval_loader.dataset.cnn(
+                                Variable(img.view(1, 3, 224,
+                                                  224).cuda())).view(
+                                                      1, 1, 3200)
+
+                            for step in range(args.max_episode_length):
+
+                                episode_length += 1
+
+                                if controller_step == False:
+                                    planner_scores, planner_hidden = nav_model.planner_step(
+                                        question_var, img_feat_var,
+                                        Variable(action_in), planner_hidden)
+
+                                    prob = F.softmax(planner_scores, dim=1)
+                                    action = int(
+                                        prob.max(1)[1].data.cpu().numpy()[0])
+                                    planner_actions.append(action)
+
+                                pred_actions.append(action)
+                                img, _, episode_done = h3d.step(action)
+
+                                episode_done = episode_done or episode_length >= args.max_episode_length
+
+                                img = torch.from_numpy(img.transpose(
+                                    2, 0, 1)).float() / 255.0
+                                img_feat_var = eval_loader.dataset.cnn(
+                                    Variable(img.view(1, 3, 224, 224)
+                                             .cuda())).view(1, 1, 3200)
+
+                                dists_to_target.append(
+                                    h3d.get_dist_to_target(h3d.env.cam.pos))
+                                pos_queue.append([
+                                    h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                                    h3d.env.cam.pos.z, h3d.env.cam.yaw
+                                ])
+
+                                if episode_done == True:
+                                    break
+
+                                # query controller to continue or not
+                                controller_action_in = Variable(
+                                    torch.LongTensor(1,
+                                                     1).fill_(action).cuda())
+                                controller_scores = nav_model.controller_step(
+                                    img_feat_var, controller_action_in,
+                                    planner_hidden[0])
+
+                                prob = F.softmax(controller_scores, dim=1)
+                                controller_action = int(
+                                    prob.max(1)[1].data.cpu().numpy()[0])
+
+                                if controller_action == 1 and controller_action_counter < 4:
+                                    controller_action_counter += 1
+                                    controller_step = True
+                                else:
+                                    controller_action_counter = 0
+                                    controller_step = False
+                                    controller_action = 0
+
+                                controller_actions.append(controller_action)
+
+                                action_in = torch.LongTensor(
+                                    1, 1).fill_(action + 1).cuda()
+
+                        # run answerer here
+                        if len(pos_queue) < 5:
+                            pos_queue = eval_loader.dataset.episode_pos_queue[len(
+                                pos_queue) - 5:] + pos_queue
+                        images = eval_loader.dataset.get_frames(
+                            h3d, pos_queue[-5:], preprocess=True)
+
+                        #print((images.shape))
+
+                        #for i, img in enumerate(images):
+                        #    img = np.transpose(img, axes=(2,1,0))
+                        #    cv2.imwrite('image_{}.png'.format(i),img)
+
+
+                        images_var = Variable(
+                            torch.from_numpy(images).cuda()).view(
+                                1, 5, 3, 224, 224)
+                        scores, att_probs = ans_model(images_var, question_var)
+                        ans_acc, ans_rank = vqa_metrics.compute_ranks(
+                            scores.data.cpu(), answer)
+
+                        pred_answer = scores.max(1)[1].data[0]
+                        #Himi changes for the awful keyerror
+                        questionIdToToken = eval_loader.dataset.vocab['questionIdxToToken']
+                        print('[Q_GT]', ' '.join([eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question[0] if x != 0]))
+                        print('[A_GT]', ' '.join([eval_loader.dataset.vocab['answerIdxToToken'][answer[0].item()]]))
+                        print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
+                        #Himi 
+                        #print('Acc is: ', ans_acc)
+                        #if 1 in ans_acc:
+                        #    print("ACCURACY 1")
+                        #print('Mean Rank Is: ', ans_rank)
+                        # print(pred_answer)
+                        # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
+
+                        # compute stats
+                        metrics_slug['accuracy_' + str(i)] = ans_acc[0]
+                        metrics_slug['mean_rank_' + str(i)] = ans_rank[0]
+                        metrics_slug['mean_reciprocal_rank_'
+                                     + str(i)] = 1.0 / ans_rank[0]
+
+                        metrics_slug['d_0_' + str(i)] = dists_to_target[0]
+                        metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
+                        metrics_slug['d_D_' + str(
+                            i)] = dists_to_target[0] - dists_to_target[-1]
+                        metrics_slug['d_min_' + str(i)] = np.array(
+                            dists_to_target).min()
+                        metrics_slug['ep_len_' + str(i)] = episode_length
+                        if action == 3:
+                            metrics_slug['stop_' + str(i)] = 1
+                        else:
+                            metrics_slug['stop_' + str(i)] = 0
+                        inside_room = []
+                        for p in pos_queue:
+                            inside_room.append(
+                                h3d.is_inside_room(
+                                    p, eval_loader.dataset.target_room))
+                        if inside_room[-1] == True:
+                            metrics_slug['r_T_' + str(i)] = 1
+                        else:
+                            metrics_slug['r_T_' + str(i)] = 0
+                        if any([x == True for x in inside_room]) == True:
+                            metrics_slug['r_e_' + str(i)] = 1
+                        else:
+                            metrics_slug['r_e_' + str(i)] = 0
+
+                    # navigation metrics
+                    metrics_list = []
+                    for i in nav_metrics.metric_names:
+                        if i not in metrics_slug:
+                            metrics_list.append(nav_metrics.metrics[
+                                nav_metrics.metric_names.index(i)][0])
+                        else:
+                            metrics_list.append(metrics_slug[i])
+
+                    nav_metrics.update(metrics_list)
+
+                    # vqa metrics
+                    metrics_list = []
+                    for i in vqa_metrics.metric_names:
+                        if i not in metrics_slug:
+                            metrics_list.append(vqa_metrics.metrics[
+                                vqa_metrics.metric_names.index(i)][0])
+                        else:
+                            metrics_list.append(metrics_slug[i])
+
+                    vqa_metrics.update(metrics_list)
+
+                try:
+                    print(nav_metrics.get_stat_string(mode=0))
+                    print(vqa_metrics.get_stat_string(mode=0))
+                except:
+                    pass
+
+                print('epoch', epoch)
+                print('invalids', len(invalids))
+
+                eval_loader.dataset._load_envs()
+                if len(eval_loader.dataset.pruned_env_set) == 0:
+                    done = True
+
+        epoch += 1
+
+        # checkpoints always #Himi changes
+        if epoch % args.eval_every == 0 and args.to_log == 1:
+            vqa_metrics.dump_log()
+            nav_metrics.dump_log()
+
+            model_state = get_state(nav_model)
+
+            aad = dict(args.__dict__)
+            ad = {}
+            for i in aad:
+                if i[0] != '_':
+                    ad[i] = aad[i]
+
+            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+            checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+                args.checkpoint_dir, epoch, best_eval_acc)
+            print('Saving checkpoint to %s' % checkpoint_path)
+            torch.save(checkpoint, checkpoint_path) 
+        # checkpoint if best val accuracy
+        if vqa_metrics.metrics[2][0] > best_eval_acc:  # ans_acc_50
+            best_eval_acc = vqa_metrics.metrics[2][0]
+            if epoch % args.eval_every == 0 and args.to_log == 1:
+                vqa_metrics.dump_log()
+                nav_metrics.dump_log()
+
+                model_state = get_state(nav_model)
+
+                aad = dict(args.__dict__)
+                ad = {}
+                for i in aad:
+                    if i[0] != '_':
+                        ad[i] = aad[i]
+
+                checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+                checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+                    args.checkpoint_dir, epoch, best_eval_acc)
+                print('Saving checkpoint to %s' % checkpoint_path)
+                torch.save(checkpoint, checkpoint_path)
+
+        print('[best_eval_ans_acc_50:%.04f]' % best_eval_acc)
+
+        eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+    return best_eval_acc
+
+def train(rank, args, shared_nav_model, shared_ans_model):
+
+    torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
+
+    if args.model_type == 'pacman':
+
+        model_kwargs = {'question_vocab': load_vocab(args.vocab_json)}
+        nav_model = NavPlannerControllerModel(**model_kwargs)
+
+    else:
+
+        exit()
+
+    model_kwargs = {'vocab': load_vocab(args.vocab_json)}
+    ans_model = VqaLstmCnnAttentionModel(**model_kwargs)
+
+    optim = torch.optim.SGD(
+        filter(lambda p: p.requires_grad, shared_nav_model.parameters()),
+        lr=args.learning_rate)
+
+    train_loader_kwargs = {
+        'questions_h5': args.train_h5,
+        'data_json': args.data_json,
+        'vocab': args.vocab_json,
+        'target_obj_conn_map_dir': args.target_obj_conn_map_dir,
+        'map_resolution': args.map_resolution,
+        'batch_size': 1,    # FOR REINFORCE!!!
+        'input_type': args.model_type,
+        'num_frames': 5,
+        'split': 'train',
+        'max_threads_per_gpu': args.max_threads_per_gpu,
+        'gpu_id': args.gpus[rank % len(args.gpus)],
+        'to_cache': args.to_cache
+    }
+
+    args.output_nav_log_path = os.path.join(args.log_dir,  'nav_train_' + str(rank) + '.json')
+    args.output_ans_log_path = os.path.join(args.log_dir, 'ans_train_' + str(rank) + '.json')
+
+    nav_model.load_state_dict(shared_nav_model.state_dict())
+    nav_model.cuda()
+
+    ans_model.load_state_dict(shared_ans_model.state_dict())
+    ans_model.eval()
+    ans_model.cuda()
+
+    # Saty: add coverage metric here (Should be inculcated into the reward structure)
+    nav_metrics = NavMetric(
+        info={'split': 'train',
+              'thread': rank},
+        metric_names=[
+            'planner_loss', 'controller_loss', 'reward', 'episode_length'
+        ],
+        log_json=args.output_nav_log_path)
+
+    vqa_metrics = VqaMetric(
+        info={'split': 'train',
+              'thread': rank},
+        metric_names=['accuracy', 'mean_rank', 'mean_reciprocal_rank'],
+        log_json=args.output_ans_log_path)
+
+    train_loader = EqaDataLoader(**train_loader_kwargs)
+
+    print('train_loader has %d samples' % len(train_loader.dataset))
+
+    t, epoch = 0, 0
+    p_losses, c_losses, reward_list, episode_length_list = [], [], [], []
+
+    nav_metrics.update([10.0, 10.0, 0, 100])
+
+    mult = 0.1
+    best_eval_acc = 0.0
+    while epoch < int(args.max_epochs):
+
+        print('###############################')
+        print('[train] Epoch is:', epoch)
+        print('###############################')
+
+        if 'pacman' in args.model_type:
+
+            planner_lossFn = MaskedNLLCriterion().cuda()
+            controller_lossFn = MaskedNLLCriterion().cuda()
+
+            done = False
+            all_envs_loaded = train_loader.dataset._check_if_all_envs_loaded()
+
+            #himi changes
+            envs = 1
+
+            while done == False:
+
+                for batch in train_loader:
+
+                    nav_model.load_state_dict(shared_nav_model.state_dict())
+                    nav_model.eval()
+                    nav_model.cuda()
+
+                    idx, question, answer, actions, action_length = batch
+                    metrics_slug = {}
+
+                    h3d = train_loader.dataset.episode_house
+
+                    # evaluate at multiple initializations
+                    # for i in [10, 30, 50]:
+
+                    t += 1
+
+                    question_var = Variable(question.cuda())
+
+                    controller_step = False
+                    planner_hidden = nav_model.planner_nav_rnn.init_hidden(1)
+
+                    # forward through planner till spawn
+                    (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, _ ) = \
+                    train_loader.dataset.get_hierarchical_features_till_spawn(
+                        actions[0, :action_length[0] + 1].numpy(),
+                        max(3, int(mult * action_length[0])))
+
+                    planner_actions_in_var = Variable(planner_actions_in.cuda())
+                    planner_img_feats_var = Variable(planner_img_feats.cuda())
+                    
+                    # Sati: Run Planner till target_pos_idx -> This is from get_hierarchical_features... 
+                    # need T-1 hidden state for planner! -> GT img_feats, Actions and question!                   
+                    for step in range(planner_actions_in.size(0)):
+
+                        # Sati: Make into one-Hot
+                        planner_actions_in_OH = oneHot(planner_actions_in_var[step].view(1,1), 4)
+
+
+                        planner_scores, planner_hidden = \
+                        nav_model.planner_step(
+                            question_var,
+                            planner_img_feats_var[step].view(1, 1, 3200), 
+                            planner_actions_in_OH, 
+                            planner_hidden)
+
+                    if controller_step == True:
+
+                        controller_img_feat_var = Variable(controller_img_feat.cuda())
+                        controller_action_in_var = torch.LongTensor(1, 1).fill_(int(controller_action_in)).cuda()
+
+                        controller_action_in_OH = Variable(oneHot(controller_action_in_var, 3).cuda())
+
+                        controller_scores = nav_model.controller_step(
+                            controller_img_feat_var.view(1, 1, 3200),
+                            controller_action_in_OH,
+                            planner_hidden[0])
+                        import pdb; pdb.set_trace()
+                        
+                        prob = F.softmax(controller_scores, dim=1)
+                        controller_action = int(prob.max(1)[1].data.cpu().numpy()[0])
+
+                        if controller_action == 1:
+                            controller_step = True
+                        else:
+                            controller_step = False
+
+                        action = int(controller_action_in)
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
+
+                    else:
+
+                        prob = F.softmax(planner_scores, dim=1)
+                        action = int(prob.max(1)[1].data.cpu().numpy()[0])
+
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
+
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+
+                    init_dist_to_target = h3d.get_dist_to_target(h3d.env.cam.pos)
+                    if init_dist_to_target < 0:  # unreachable
+                        invalids.append([idx[0], i])
+                        continue
+
+                    episode_length = 0
+                    episode_done = True
+                    controller_action_counter = 0
+
+                    dists_to_target, pos_queue = [init_dist_to_target], [init_pos]
+
+                    rewards, planner_actions, planner_log_probs, controller_actions, controller_log_probs = [], [], [], [], []
+
+                    if action != 3:
+
+                        # take the first step -> Include coverage in reward!
+                        img, rwd, episode_done = h3d.step(action, step_reward=True)
+                        img = torch.from_numpy(img.transpose(
+                            2, 0, 1)).float() / 255.0
+                        img_feat_var = train_loader.dataset.cnn(
+                            Variable(img.view(1, 3, 224, 224).cuda())).view(
+                                1, 1, 3200)
+
+                        for step in range(args.max_episode_length):
+
+                            episode_length += 1
+
+                            if controller_step == False:
+                                planner_scores, planner_hidden = nav_model.planner_step(
+                                    question_var, img_feat_var,
+                                    Variable(action_in), 
+                                    planner_hidden)
+
+                                planner_prob = F.softmax(planner_scores, dim=1)
+                                planner_log_prob = F.log_softmax(
+                                    planner_scores, dim=1)
+
+                                action = planner_prob.multinomial(num_samples=1).data
+                                planner_log_prob = planner_log_prob.gather(
+                                    1, Variable(action))
+
+                                planner_log_probs.append(
+                                    planner_log_prob.cpu())
+
+                                action = int(action.cpu().numpy()[0, 0])
+                                planner_actions.append(action)
+
+                            img, rwd, episode_done = h3d.step(action, step_reward=True)
+
+                            episode_done = episode_done or episode_length >= args.max_episode_length
+
+                            rewards.append(rwd)
+
+                            img = torch.from_numpy(img.transpose(
+                                2, 0, 1)).float() / 255.0
+                            img_feat_var = train_loader.dataset.cnn(
+                                Variable(img.view(1, 3, 224, 224)
+                                         .cuda())).view(1, 1, 3200)
+
+                            dists_to_target.append(
+                                h3d.get_dist_to_target(h3d.env.cam.pos))
+                            pos_queue.append([
+                                h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                                h3d.env.cam.pos.z, h3d.env.cam.yaw
+                            ])
+
+                            if episode_done == True:
+                                break
+
+                            # query controller to continue or not
+                            controller_action_in = Variable(
+                                torch.LongTensor(1, 1).fill_(action).cuda())
+                            controller_scores = nav_model.controller_step(
+                                img_feat_var, controller_action_in,
+                                planner_hidden[0])
+
+                            controller_prob = F.softmax(
+                                controller_scores, dim=1)
+                            controller_log_prob = F.log_softmax(
+                                controller_scores, dim=1)
+
+                            controller_action = controller_prob.multinomial(num_samples=1
+                            ).data
+
+                            if int(controller_action[0]
+                                   ) == 1 and controller_action_counter < 4:
+                                controller_action_counter += 1
+                                controller_step = True
+                            else:
+                                controller_action_counter = 0
+                                controller_step = False
+                                controller_action.fill_(0)
+
+                            controller_log_prob = controller_log_prob.gather(
+                                1, Variable(controller_action))
+                            controller_log_probs.append(
+                                controller_log_prob.cpu())
+
+                            controller_action = int(
+                                controller_action.cpu().numpy()[0, 0])
+                            controller_actions.append(controller_action)
+                            action_in = torch.LongTensor(
+                                1, 1).fill_(action + 1).cuda()
+
+                    # run answerer here
+                    ans_acc = [0]
+                    if action == 3:
+                        if len(pos_queue) < 5:
+                            pos_queue = train_loader.dataset.episode_pos_queue[len(
+                                pos_queue) - 5:] + pos_queue
+                        images = train_loader.dataset.get_frames(
+                            h3d, pos_queue[-5:], preprocess=True)
+                        images_var = Variable(
+                            torch.from_numpy(images).cuda()).view(
+                                1, 5, 3, 224, 224)
+                        scores, att_probs = ans_model(images_var, question_var)
+                        ans_acc, ans_rank = vqa_metrics.compute_ranks(
+                            scores.data.cpu(), answer)
+                        vqa_metrics.update([ans_acc, ans_rank, 1.0 / ans_rank])
+
+                    rewards.append(h3d.success_reward * ans_acc[0])
+
+                    R = torch.zeros(1, 1)
+
+                    planner_loss = 0
+                    controller_loss = 0
+
+                    planner_rev_idx = -1
+                    for i in reversed(range(len(rewards))):
+                        R = 0.99 * R + rewards[i]
+                        advantage = R - nav_metrics.metrics[2][1]
+
+                        if i < len(controller_actions):
+                            controller_loss = controller_loss - controller_log_probs[i] * Variable(
+                                advantage)
+
+                            if controller_actions[i] == 0 and planner_rev_idx + len(planner_log_probs) >= 0:
+                                planner_loss = planner_loss - planner_log_probs[planner_rev_idx] * Variable(
+                                    advantage)
+                                planner_rev_idx -= 1
+
+                        elif planner_rev_idx + len(planner_log_probs) >= 0:
+
+                            planner_loss = planner_loss - planner_log_probs[planner_rev_idx] * Variable(
+                                advantage)
+                            planner_rev_idx -= 1
+
+                    controller_loss /= max(1, len(controller_log_probs))
+                    planner_loss /= max(1, len(planner_log_probs))
+
+                    optim.zero_grad()
+
+                    if isinstance(planner_loss, float) == False and isinstance(controller_loss, float) == False:
+                        p_losses.append(planner_loss.data[0, 0])
+                        c_losses.append(controller_loss.data[0, 0])
+                        reward_list.append(np.sum(rewards))
+                        episode_length_list.append(episode_length)
+
+                        (planner_loss + controller_loss).backward()
+
+                        ensure_shared_grads(nav_model.cpu(), shared_nav_model)
+                        optim.step()
+
+                    if len(reward_list) > 50:
+
+                        nav_metrics.update([
+                            p_losses, c_losses, reward_list,
+                            episode_length_list
+                        ])
+                        envs+=1
+                        print('[train train_eqa.py] Envs is: ', envs)                      
+
+
+                        print(nav_metrics.get_stat_string())
+
+
+                        if args.to_log == 1 and envs % 10 == 0 :
+                            vqa_metrics.dump_log()
+                            nav_metrics.dump_log()
+
+                            model_state = get_state(nav_model)
+
+                            aad = dict(args.__dict__)
+                            ad = {}
+                            for i in aad:
+                                if i[0] != '_':
+                                    ad[i] = aad[i]
+
+                            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+                            checkpoint_path = '%s/epoch_%d_ans_10_envs_%d.pt' % (
+                                args.checkpoint_dir, epoch, envs)
+                            print('Saving checkpoint to %s' % checkpoint_path)
+                            torch.save(checkpoint, checkpoint_path)
+                        ##################################
+                        if args.to_log == 1:
+                            nav_metrics.dump_log()
+
+                        if nav_metrics.metrics[2][1] > 0.35:
+                            mult = min(mult + 0.1, 1.0)
+
+                        p_losses, c_losses, reward_list, episode_length_list = [], [], [], []
+
+                #Himi changes, checking every 100
+                print('Out of that loop') 
+                # if args.to_log == 1 and envs % 2 == 0 :
+                #     vqa_metrics.dump_log()
+                #     nav_metrics.dump_log()
+
+                #     model_state = get_state(nav_model)
+
+                #     aad = dict(args.__dict__)
+                #     ad = {}
+                #     for i in aad:
+                #         if i[0] != '_':
+                #             ad[i] = aad[i]
+
+                #     checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+                #     checkpoint_path = '%s/epoch_%d_ans_10_envs_%d.pt' % (
+                #         args.checkpoint_dir, epoch, envs)
+                #     print('Saving checkpoint to %s' % checkpoint_path)
+                #     torch.save(checkpoint, checkpoint_path)
+                # ##################################
+
+                if all_envs_loaded == False:
+                    train_loader.dataset._load_envs(in_order=True)
+                    if len(train_loader.dataset.pruned_env_set) == 0:
+                        done = True
+                        if args.to_cache == False:
+                            train_loader.dataset._load_envs(
+                                start_idx=0, in_order=True)
+                else:
+                    done = True
+
+        epoch += 1
+        best_eval_acc = eval(0, args, nav_model, ans_model, best_eval_acc, epoch)
+        #Himi changes
+        # if epoch % args.save_every == 0 and args.to_log == 1:
+        #     vqa_metrics.dump_log()
+        #     nav_metrics.dump_log()
+
+        #     model_state = get_state(nav_model)
+
+        #     aad = dict(args.__dict__)
+        #     ad = {}
+        #     for i in aad:
+        #         if i[0] != '_':
+        #             ad[i] = aad[i]
+
+        #     checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+        #     checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+        #         args.checkpoint_dir, epoch, best_eval_acc)
+        #     print('Saving checkpoint to %s' % checkpoint_path)
+        #     torch.save(checkpoint, checkpoint_path)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    # data params
+    parser.add_argument('-train_h5', default='utils/data/pruned_train_v2.h5')
+    parser.add_argument('-val_h5', default='utils/data/pruned_val_v2.h5')
+    parser.add_argument('-test_h5', default='utils/data/pruned_test_v2.h5')
+    parser.add_argument('-data_json', default='utils/data/pruned_data_json_v2.json')
+    #parser.add_argument('-vocab_json', default='utils/data/pruned_vocab.json')
+    parser.add_argument('-vocab_json', default = 'data/new_vocab.json')
+    parser.add_argument(
+        '-target_obj_conn_map_dir',
+        default='data/500')
+    parser.add_argument('-map_resolution', default=500, type=int)
+
+    parser.add_argument(
+        '-mode',
+        default='train+eval',
+        type=str,
+        choices=['train', 'eval', 'train+eval'])
+    parser.add_argument('-eval_split', default='val', type=str)
+
+    # model details
+    parser.add_argument(
+        '-model_type',
+        default='pacman',
+        choices=['cnn', 'cnn+q', 'lstm', 'lstm+q', 'pacman'])
+    parser.add_argument('-max_episode_length', default=100, type=int)
+
+    # optim params
+    parser.add_argument('-batch_size', default=20, type=int)
+    parser.add_argument('-learning_rate', default=1e-5, type=float)
+    parser.add_argument('-max_epochs', default=500, type=int)
+
+    # bookkeeping
+    parser.add_argument('-print_every', default=5, type=int)
+    parser.add_argument('-eval_every', default=1, type=int)
+    parser.add_argument('-identifier', default='pacman')
+    parser.add_argument('-num_processes', default=1, type=int)
+    parser.add_argument('-max_threads_per_gpu', default=10, type=int)
+
+    # checkpointing
+    parser.add_argument('-nav_checkpoint_path', default=False)
+    parser.add_argument('-ans_checkpoint_path', default=False)
+    parser.add_argument('-eqa_checkpoint_path', default=None)
+    parser.add_argument('-checkpoint_dir', default='checkpoints/eqa/')
+    parser.add_argument('-log_dir', default='logs/eqa/')
+    parser.add_argument('-to_log', default=1, type=int)
+    parser.add_argument('-to_cache', action='store_true')
+    args = parser.parse_args()
+
+    args.time_id = time.strftime("%m_%d_%H:%M")
+
+    try:
+        args.gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+        args.gpus = [int(x) for x in args.gpus]
+    except KeyError:
+        print("CPU not supported")
+        exit()
+
+    # Load navigation model
+    print('Loading navigation checkpoint from %s' % args.nav_checkpoint_path)
+    checkpoint = torch.load(
+        args.nav_checkpoint_path, map_location={
+            'cuda:0': 'cpu'
+        })
+
+    args_to_keep = ['model_type']
+
+    for i in args.__dict__:
+        if i not in args_to_keep:
+            checkpoint['args'][i] = args.__dict__[i]
+
+    args = type('new_dict', (object, ), checkpoint['args'])
+    args.checkpoint_dir = os.path.join(args.checkpoint_dir,
+                                       args.time_id + '_' + args.identifier)
+    args.log_dir = os.path.join(args.log_dir,
+                                args.time_id + '_' + args.identifier)
+    #print(args.__dict__)
+    
+    if args.eqa_checkpoint_path is not None:
+        eqa_checkpoint = torch.load(args.eqa_checkpoint_path, map_location={'cuda:0':'cpu'})
+        args.checkpoint_dir = eqa_checkpoint['args']['checkpoint_dir']
+        args.log_dir = eqa_checkpoint['args']['log_dir']
+
+    if not os.path.exists(args.checkpoint_dir) and args.to_log == 1:
+        os.makedirs(args.checkpoint_dir)
+        os.makedirs(args.log_dir)
+
+    if args.model_type == 'pacman':
+
+        model_kwargs = {'question_vocab': load_vocab(args.vocab_json)}
+        shared_nav_model = NavPlannerControllerModel(**model_kwargs)
+
+    else:
+
+        exit()
+
+    shared_nav_model.share_memory()
+
+    print('Loading navigation params from checkpoint: %s' %
+          args.nav_checkpoint_path)
+    shared_nav_model.load_state_dict(checkpoint['state'])
+
+    # Load answering model
+    print('Loading answering checkpoint from %s' % args.ans_checkpoint_path)
+    ans_checkpoint = torch.load(
+        args.ans_checkpoint_path, map_location={
+            'cuda:0': 'cpu'
+        })
+
+    ans_model_kwargs = {'vocab': load_vocab(args.vocab_json)}
+    shared_ans_model = VqaLstmCnnAttentionModel(**ans_model_kwargs)
+
+    shared_ans_model.share_memory()
+
+    print('Loading params from checkpoint: %s' % args.ans_checkpoint_path)
+    shared_ans_model.load_state_dict(ans_checkpoint['state'])
+
+    if args.mode == 'eval':
+
+        eval(0, args, shared_nav_model, shared_ans_model)
+
+    elif args.mode == 'train':
+
+        train(0, args, shared_nav_model, shared_ans_model)
+
+    else:
+
+        processes = []
+
+        p = mp.Process(
+            target=eval, args=(0, args, shared_nav_model, shared_ans_model))
+        p.start()
+        processes.append(p)
+
+        for rank in range(1, args.num_processes + 1):
+            p = mp.Process(
+                target=train,
+                args=(rank, args, shared_nav_model, shared_ans_model))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
