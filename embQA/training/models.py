@@ -839,7 +839,7 @@ class NavRnn(nn.Module):
             #         [input_feats, self.action_embed(actions_in)], 2)
             print("Size of input_feats- ", input_feats.size())
             print("Action_Size", actions_in.size())
-            
+
             input_feats = torch.cat([input_feats, actions_in], 2)
         output, hidden = self.rnn(input_feats, hidden)
 
@@ -1128,8 +1128,8 @@ class NavPlannerControllerModel(nn.Module):
 
         controller_in = torch.cat([
             controller_img_feats, controller_actions_embed,
-            controller_hidden_in
-        ], 1)
+            controller_hidden_in], 1)
+        
         controller_scores = self.controller(controller_in)
 
         return planner_scores, controller_scores, planner_hidden

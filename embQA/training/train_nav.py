@@ -18,6 +18,13 @@ from tqdm import tqdm
 import time
 import cv2
 torch.backends.cudnn.enabled = False
+import pdb
+
+def oneHot(vec, dim):
+    batch_size = vec.size(0)
+    out = torch.zeros(batch_size, dim)
+    out[np.arange(batch_size), vec.long()] = 1
+    return out
 
 ################################################################################################
 #make models trained in pytorch 4 compatible with earlier pytorch versions
@@ -1044,29 +1051,24 @@ def train(rank, args, shared_model, resume_epoch = 0):
                         controller_img_feats, controller_actions_in, planner_hidden_idx, \
                         controller_outs, controller_action_lengths, controller_masks = batch
 
+                    ############################ CONVERT TO VARIABLES ###################################
                     questions_var = Variable(questions.cuda())
 
                     planner_img_feats_var = Variable(planner_img_feats.cuda())
-                    planner_actions_in_var = Variable(
-                        planner_actions_in.cuda())
-                    planner_actions_out_var = Variable(
-                        planner_actions_out.cuda())
+                    planner_actions_in_var = Variable(planner_actions_in.cuda())
+                    planner_actions_out_var = Variable(planner_actions_out.cuda())
                     planner_action_lengths = planner_action_lengths.cuda()
                     planner_masks_var = Variable(planner_masks.cuda())
 
-                    controller_img_feats_var = Variable(
-                        controller_img_feats.cuda())
-                    controller_actions_in_var = Variable(
-                        controller_actions_in.cuda())
-                    planner_hidden_idx_var = Variable(
-                        planner_hidden_idx.cuda())
+                    controller_img_feats_var = Variable(controller_img_feats.cuda())
+                    controller_actions_in_var = Variable(controller_actions_in.cuda())
+                    planner_hidden_idx_var = Variable(planner_hidden_idx.cuda())
                     controller_outs_var = Variable(controller_outs.cuda())
-                    controller_action_lengths = controller_action_lengths.cuda(
-                    )
+                    controller_action_lengths = controller_action_lengths.cuda()
                     controller_masks_var = Variable(controller_masks.cuda())
 
-                    planner_action_lengths, perm_idx = planner_action_lengths.sort(
-                        0, descending=True)
+                    #######################GET permuted indices##########################
+                    planner_action_lengths, perm_idx = planner_action_lengths.sort(0, descending=True)
 
                     questions_var = questions_var[perm_idx]
 
@@ -1075,26 +1077,28 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     planner_actions_out_var = planner_actions_out_var[perm_idx]
                     planner_masks_var = planner_masks_var[perm_idx]
 
-                    controller_img_feats_var = controller_img_feats_var[
-                        perm_idx]
-                    controller_actions_in_var = controller_actions_in_var[
-                        perm_idx]
+                    controller_img_feats_var = controller_img_feats_var[perm_idx]
+                    controller_actions_in_var = controller_actions_in_var[perm_idx]
                     controller_outs_var = controller_outs_var[perm_idx]
                     planner_hidden_idx_var = planner_hidden_idx_var[perm_idx]
-                    controller_action_lengths = controller_action_lengths[
-                        perm_idx]
+                    controller_action_lengths = controller_action_lengths[perm_idx]
                     controller_masks_var = controller_masks_var[perm_idx]
+                    ###########################################################################
+                    
 
+                    ############### CONVERT TO OH ##########################
+                    planner_actions_in_OH = Variable(oneHot(planner_actions_in_var, 4).cuda())
+                    
+                    pdb.set_trace()
                     planner_scores, controller_scores, planner_hidden = model(
                         questions_var, planner_img_feats_var,
-                        planner_actions_in_var,
+                        planner_actions_in_OH,
                         planner_action_lengths.cpu().numpy(),
                         planner_hidden_idx_var, controller_img_feats_var,
                         controller_actions_in_var, controller_action_lengths)
 
                     planner_logprob = F.log_softmax(planner_scores, dim=1)
-                    controller_logprob = F.log_softmax(
-                        controller_scores, dim=1)
+                    controller_logprob = F.log_softmax(controller_scores, dim=1)
 
                     planner_loss = planner_lossFn(
                         planner_logprob,
