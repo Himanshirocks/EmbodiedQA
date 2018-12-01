@@ -18,6 +18,19 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import pdb
 
+def oneHot_vol(vec, dim):
+    batch_size, T_p  = vec.size()
+    out = torch.zeros(batch_size, T_p, dim)
+    for i in range(batch_size):
+        out[i, np.arange(T_p), vec[i].long()] = 1
+    # out[np.arange(batch_size), vec.long()] = 1
+    return out
+
+def oneHot_vector(vec, dim):
+    batch_size = vec.size(0)
+    out = torch.zeros(batch_size, dim)
+    out[np.arange(batch_size), vec.long()] = 1
+    return out
 
 def build_mlp(input_dim,
               hidden_dims,
@@ -742,7 +755,7 @@ class NavRnn(nn.Module):
                   (self.rnn_type, rnn_input_dim))
 
         if self.action_input == True:
-            # self.action_embed = nn.Embedding(num_actions, action_embed_dim)
+            self.action_embed = nn.Embedding(num_actions, action_embed_dim)
             rnn_input_dim += num_actions
             print('Adding input to %s: action, rnn dim: %d' % (self.rnn_type,
                                                                rnn_input_dim))
@@ -782,20 +795,28 @@ class NavRnn(nn.Module):
         if self.question_input == True:
             N, D = question_feats.size()
             question_feats = question_feats.view(N, 1, D)
+            
             if T == False:
                 T = actions_in.size(1)
+            
             question_feats = question_feats.repeat(1, T, 1)
+            
             if len(input_feats) == 0:
                 input_feats = question_feats
             else:
                 input_feats = torch.cat([input_feats, question_feats], 2)
+        # Actions \in {0,1,2,3}
 
         if self.action_input == True:
-            if len(input_feats) == 0:
-                input_feats = self.action_embed(actions_in)
-            else:
-                input_feats = torch.cat(
-                    [input_feats, self.action_embed(actions_in)], 2)
+            # if len(input_feats) == 0:
+            #     input_feats = self.action_embed(actions_in)
+            # else:
+            #     input_feats = torch.cat(
+            #         [input_feats, self.action_embed(actions_in)], 2)
+            # Convert to One Hot
+            actions_OH = Variable(oneHot_vol(actions_in, 4).cuda())
+            input_feats = torch.cat([input_feats, actions_OH], 2)
+            # ^ This is working!
 
         packed_input_feats = pack_padded_sequence(
             input_feats, action_lengths, batch_first=True)
@@ -803,7 +824,8 @@ class NavRnn(nn.Module):
         rnn_output, _ = pad_packed_sequence(packed_output, batch_first=True)
         output = self.decoder(rnn_output.contiguous().view(
             rnn_output.size(0) * rnn_output.size(1), rnn_output.size(2)))
-
+        # Output size -> batch_size * T_p, action_dim
+        
         if self.return_states == True:
             return rnn_output, output, hidden
         else:
@@ -837,10 +859,9 @@ class NavRnn(nn.Module):
             # else:
             #     input_feats = torch.cat(
             #         [input_feats, self.action_embed(actions_in)], 2)
-            print("Size of input_feats- ", input_feats.size())
-            print("Action_Size", actions_in.size())
-
-            input_feats = torch.cat([input_feats, actions_in], 2)
+            actions_OH = Variable(oneHot_vol(actions_in, 4).cuda())
+            input_feats = torch.cat([input_feats, actions_OH], 2)
+            # Saty: ^ working!
         output, hidden = self.rnn(input_feats, hidden)
 
         output = self.decoder(output.contiguous().view(
@@ -1073,7 +1094,7 @@ class NavPlannerControllerModel(nn.Module):
 
         controller_kwargs = {
             'input_dim':
-            planner_rnn_image_feat_dim + num_output +
+            planner_rnn_image_feat_dim + 3 +
             planner_rnn_hidden_dim,
             'hidden_dims':
             controller_fc_dims,
@@ -1087,16 +1108,23 @@ class NavPlannerControllerModel(nn.Module):
     def forward(self,questions,planner_img_feats,  planner_actions_in, planner_action_lengths, planner_hidden_index,  controller_img_feats,controller_actions_in, controller_action_lengths, planner_hidden=False):
 
         # ts = time.time()
+        # N_p = batch_size
+        # T_p = ma len actions
         N_p, T_p, _ = planner_img_feats.size()
 
+        # get image features for when planner executes action and controller
         planner_img_feats = self.cnn_fc_layer(planner_img_feats)
         controller_img_feats = self.cnn_fc_layer(controller_img_feats)
 
+        # Question encoding
         ques_feats = self.q_rnn(questions)
         ques_feats = self.ques_tr(ques_feats)
 
+        # Run planner <- Running as OH vector
         planner_states, planner_scores, planner_hidden = self.planner_nav_rnn(
-            planner_img_feats, ques_feats, planner_actions_in,
+            planner_img_feats, 
+            ques_feats, 
+            planner_actions_in,
             planner_action_lengths)
 
         planner_hidden_index = planner_hidden_index[:, :
@@ -1120,14 +1148,19 @@ class NavPlannerControllerModel(nn.Module):
         controller_hidden_in = planner_states.gather(1, planner_hidden_index)
         controller_hidden_in = controller_hidden_in.view(
             N_c * T_c, controller_hidden_in.size(2))
-
-        controller_img_feats = controller_img_feats.contiguous().view(
-            N_c * T_c, -1)
-        controller_actions_embed = self.planner_nav_rnn.action_embed(
-            controller_actions_in).view(N_c * T_c, -1)
+        # ^ make it similar to planner_scores
+        
+        controller_img_feats = controller_img_feats.contiguous().view(N_c * T_c, -1)
+        # print("Controller Actions in:", controller_actions_in[0])
+        # print("Size:", controller_actions_in.size())
+        
+        # controller_actions_embed = self.planner_nav_rnn.action_embed(controller_actions_in).view(N_c * T_c, -1)
+        controller_actions_OH = Variable(oneHot_vol(controller_actions_in, 3).cuda())
+        controller_actions_OH = controller_actions_OH.view(-1, 3)
 
         controller_in = torch.cat([
-            controller_img_feats, controller_actions_embed,
+            controller_img_feats, 
+            controller_actions_OH,
             controller_hidden_in], 1)
         
         controller_scores = self.controller(controller_in)
@@ -1152,8 +1185,9 @@ class NavPlannerControllerModel(nn.Module):
         img_feats = img_feats.view(1, -1)
         # actions_embed = actions_embed.view(1, -1)
         hidden_in = hidden_in.view(1, -1)
+        controller_actions_OH = Variable(oneHot_vol(actions_in, 3).cuda()).view(1,-1)
 
-        controller_in = torch.cat([img_feats, actions_in, hidden_in], dim=1)
+        controller_in = torch.cat([img_feats, controller_actions_OH, hidden_in], dim=1)
         controller_scores = self.controller(controller_in)
 
         return controller_scores

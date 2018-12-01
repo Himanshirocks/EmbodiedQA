@@ -19,12 +19,40 @@ import time
 import cv2
 torch.backends.cudnn.enabled = False
 import pdb
-
+import pickle as pkl
+from collections import defaultdict
+import csv
 def oneHot(vec, dim):
     batch_size = vec.size(0)
     out = torch.zeros(batch_size, dim)
     out[np.arange(batch_size), vec.long()] = 1
     return out
+
+def load_semantic_classes(color_file):
+    if color_file is None:
+        raise ValueError('please input colormap_fine.csv file')
+
+    semantic_classes = {}
+
+    with open(color_file) as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                # OpenCV is in BGR Format
+                c = np.array((row['r'], row['g'], row['b']), dtype=np.uint8)
+                fine_cat = row['name'].lower()
+                semantic_classes[fine_cat] = c
+
+    return semantic_classes
+
+
+def coverage(img, target_obj_class, color_file):
+    
+    hei, wid, _ = img.shape
+    trgt_obj_col = color_file[target_obj_class]
+    mask = np.all(img == trgt_obj_col, axis=2)
+    cov = np.sum(mask)/(hei * wid)
+    
+    return cov
 
 ################################################################################################
 #make models trained in pytorch 4 compatible with earlier pytorch versions
@@ -41,7 +69,7 @@ except AttributeError:
 
 ################################################################################################
 
-def eval(rank, args, shared_model, best_eval_acc):
+def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
     #torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -110,643 +138,655 @@ def eval(rank, args, shared_model, best_eval_acc):
     print('eval_loader has %d samples' % len(eval_loader.dataset))
     logging.info("EVAL: eval_loader has {} samples".format(len(eval_loader.dataset)))
 
+    #Saty:
+    semantic_classes = load_semantic_classes(eval_loader.dataset.cfg['colorFile'])
+    coverage_log = defaultdict(dict)
     args.output_log_path = os.path.join(args.log_dir,
                                         'eval_' + str(rank) + '.json')
+    invalids = []
 
-    t, epoch, best_eval_acc = 0, 0, 0.0
+    model.load_state_dict(shared_model.state_dict())
+    model.eval()
 
-    max_epochs = args.max_epochs
-    if args.mode == 'eval':
-        max_epochs = 1
-    while epoch < 1:
+    # that's a lot of numbers
+    metrics = NavMetric(
+        info={'split': args.eval_split,
+              'thread': rank},
+        metric_names=[
+            'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
+            'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
+            'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
+            'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
+            'ep_len_30', 'ep_len_50', 'cov_'
+        ],
+        log_json=args.output_log_path)
 
-        invalids = []
+    if 'cnn' in args.model_type:
 
-        model.load_state_dict(shared_model.state_dict())
-        model.eval()
+        done = False
 
-        # that's a lot of numbers
-        metrics = NavMetric(
-            info={'split': args.eval_split,
-                  'thread': rank},
-            metric_names=[
-                'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
-                'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
-                'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
-                'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
-                'ep_len_30', 'ep_len_50'
-            ],
-            log_json=args.output_log_path)
+        while done == False:
 
-        if 'cnn' in args.model_type:
+            for batch in tqdm(eval_loader):
 
-            done = False
+                model.load_state_dict(shared_model.state_dict())
+                model.to(device)
 
-            while done == False:
+                idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
+                ##########
+                #Sai analysis
+                # pdb.set_trace()
+                if 364909 in idx:
+                    #pass
+                    question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                else:
+                    sys.exit(1)
+                ##########
+                metrics_slug = {}
 
-                for batch in tqdm(eval_loader):
+                # evaluate at multiple initializations
+                for i in [10, 30, 50]:
 
-                    model.load_state_dict(shared_model.state_dict())
-                    model.to(device)
+                    t += 1
 
-                    idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
-                    ##########
-                    #Sai analysis
-                    # pdb.set_trace()
-                    if 364909 in idx:
-                        #pass
-                        question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
-                    else:
-                        sys.exit(1)
-                    ##########
-                    metrics_slug = {}
+                    if action_length[0] + 1 - i - 5 < 0:
+                        invalids.append(idx[0])
+                        continue
 
-                    # evaluate at multiple initializations
-                    for i in [10, 30, 50]:
+                    ep_inds = [
+                        x for x in range(action_length[0] + 1 - i - 5,
+                                         action_length[0] + 1 - i)
+                    ]
 
-                        t += 1
+                    sub_img_feats = torch.index_select(
+                        img_feats, 1, torch.LongTensor(ep_inds))
 
-                        if action_length[0] + 1 - i - 5 < 0:
-                            invalids.append(idx[0])
-                            continue
+                    init_pos = eval_loader.dataset.episode_pos_queue[
+                        ep_inds[-1]]
 
-                        ep_inds = [
-                            x for x in range(action_length[0] + 1 - i - 5,
-                                             action_length[0] + 1 - i)
-                        ]
+                    h3d = eval_loader.dataset.episode_house
 
-                        sub_img_feats = torch.index_select(
-                            img_feats, 1, torch.LongTensor(ep_inds))
+                    h3d.env.reset(
+                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
-                        init_pos = eval_loader.dataset.episode_pos_queue[
-                            ep_inds[-1]]
+                    init_dist_to_target = h3d.get_dist_to_target(
+                        h3d.env.cam.pos)
+                    if init_dist_to_target < 0:  # unreachable
+                        invalids.append(idx[0])
+                        continue
 
-                        h3d = eval_loader.dataset.episode_house
+                    sub_img_feats_var = Variable(sub_img_feats.to(device))
+                    if '+q' in args.model_type:
+                        questions_var = Variable(questions.to(device))
 
-                        h3d.env.reset(
-                            x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+                    # sample actions till max steps or <stop>
+                    # max no. of actions = 100
 
-                        init_dist_to_target = h3d.get_dist_to_target(
-                            h3d.env.cam.pos)
-                        if init_dist_to_target < 0:  # unreachable
-                            invalids.append(idx[0])
-                            continue
+                    episode_length = 0
+                    episode_done = True
 
-                        sub_img_feats_var = Variable(sub_img_feats.to(device))
+                    dists_to_target, pos_queue, actions = [
+                        init_dist_to_target
+                    ], [init_pos], []
+
+                    for step in range(args.max_episode_length):
+
+                        episode_length += 1
+
                         if '+q' in args.model_type:
-                            questions_var = Variable(questions.to(device))
-
-                        # sample actions till max steps or <stop>
-                        # max no. of actions = 100
-
-                        episode_length = 0
-                        episode_done = True
-
-                        dists_to_target, pos_queue, actions = [
-                            init_dist_to_target
-                        ], [init_pos], []
-
-                        for step in range(args.max_episode_length):
-
-                            episode_length += 1
-
-                            if '+q' in args.model_type:
-                                scores = model(sub_img_feats_var,
-                                               questions_var)
-                            else:
-                                scores = model(sub_img_feats_var)
-
-                            prob = F.softmax(scores, dim=1)
-
-                            action = int(prob.max(1)[1].data.cpu().numpy()[0])
-
-                            actions.append(action)
-
-                            img, _, episode_done = h3d.step(action)
-
-                            episode_done = episode_done or episode_length >= args.max_episode_length
-
-                            img = torch.from_numpy(img.transpose(
-                                2, 0, 1)).float() / 255.0
-                            img_feat_var = eval_loader.dataset.cnn(
-                                Variable(img.view(1, 3, 224, 224)
-                                         .to(device))).view(1, 1, 3200)
-                            sub_img_feats_var = torch.cat(
-                                [sub_img_feats_var, img_feat_var], dim=1)
-                            sub_img_feats_var = sub_img_feats_var[:, -5:, :]
-
-                            dists_to_target.append(
-                                h3d.get_dist_to_target(h3d.env.cam.pos))
-                            pos_queue.append([
-                                h3d.env.cam.pos.x, h3d.env.cam.pos.y,
-                                h3d.env.cam.pos.z, h3d.env.cam.yaw
-                            ])
-
-                            if episode_done == True:
-                                break
-
-                        # compute stats
-                        metrics_slug['d_0_' + str(i)] = dists_to_target[0]
-                        metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
-                        metrics_slug['d_D_' + str(
-                            i)] = dists_to_target[0] - dists_to_target[-1]
-                        metrics_slug['d_min_' + str(i)] = np.array(
-                            dists_to_target).min()
-                        metrics_slug['ep_len_' + str(i)] = episode_length
-                        if action == 3:
-                            metrics_slug['stop_' + str(i)] = 1
+                            scores = model(sub_img_feats_var,
+                                           questions_var)
                         else:
-                            metrics_slug['stop_' + str(i)] = 0
-                        inside_room = []
-                        for p in pos_queue:
-                            inside_room.append(
-                                h3d.is_inside_room(
-                                    p, eval_loader.dataset.target_room))
-                        if inside_room[-1] == True:
-                            metrics_slug['r_T_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_T_' + str(i)] = 0
-                        if any([x == True for x in inside_room]) == True:
-                            metrics_slug['r_e_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_e_' + str(i)] = 0
+                            scores = model(sub_img_feats_var)
 
-                    # collate and update metrics
-                    metrics_list = []
-                    for i in metrics.metric_names:
-                        if i not in metrics_slug:
-                            metrics_list.append(metrics.metrics[
-                                metrics.metric_names.index(i)][0])
-                        else:
-                            metrics_list.append(metrics_slug[i])
+                        prob = F.softmax(scores, dim=1)
 
-                    # update metrics
-                    metrics.update(metrics_list)
+                        action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
-                print(metrics.get_stat_string(mode=0))
-                print('invalids', len(invalids))
-                logging.info("EVAL: metrics: {}".format(metrics.get_stat_string(mode=0)))
-                logging.info("EVAL: invalids: {}".format(len(invalids)))
+                        actions.append(action)
 
-               # del h3d
-                eval_loader.dataset._load_envs()
-                if len(eval_loader.dataset.pruned_env_set) == 0:
-                    done = True
+                        img, _, episode_done = h3d.step(action)
 
-        elif 'lstm' in args.model_type:
+                        episode_done = episode_done or episode_length >= args.max_episode_length
 
-            done = False
-
-            while done == False:
-
-                if args.overfit:
-                    metrics = NavMetric(
-                        info={'split': args.eval_split,
-                              'thread': rank},
-                        metric_names=[
-                            'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
-                            'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
-                            'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
-                            'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
-                            'ep_len_30', 'ep_len_50'
-                        ],
-                        log_json=args.output_log_path)
-
-                for batch in tqdm(eval_loader):
-
-                    model.load_state_dict(shared_model.state_dict())
-                    model.to(device)
-
-                    idx, questions, answer, _, actions_in, actions_out, action_lengths, _ = batch
-                    question_var = Variable(questions.to(device))
-                    metrics_slug = {}
-
-                    # evaluate at multiple initializations
-                    for i in [10, 30, 50]:
-
-                        t += 1
-
-                        if action_lengths[0] - 1 - i < 0:
-                            invalids.append([idx[0], i])
-                            continue
-
-                        h3d = eval_loader.dataset.episode_house
-
-                        # forward through lstm till spawn
-                        if len(eval_loader.dataset.episode_pos_queue[:-i]
-                               ) > 0:
-                            images = eval_loader.dataset.get_frames(
-                                h3d,
-                                eval_loader.dataset.episode_pos_queue[:-i],
-                                preprocess=True)
-                            raw_img_feats = eval_loader.dataset.cnn(
-                                Variable(torch.FloatTensor(images).to(device)))
-
-                            actions_in_pruned = actions_in[:, :
-                                                           action_lengths[0] -
-                                                           i]
-                            actions_in_var = Variable(actions_in_pruned.to(device))
-                            action_lengths_pruned = action_lengths.clone(
-                            ).fill_(action_lengths[0] - i)
-                            img_feats_var = raw_img_feats.view(1, -1, 3200)
-
-                            if '+q' in args.model_type:
-                                scores, hidden = model(
-                                    img_feats_var, question_var,
-                                    actions_in_var,
-                                    action_lengths_pruned.cpu().numpy())
-                            else:
-                                scores, hidden = model(
-                                    img_feats_var, False, actions_in_var,
-                                    action_lengths_pruned.cpu().numpy())
-                            try:
-                                init_pos = eval_loader.dataset.episode_pos_queue[
-                                    -i]
-                            except:
-                                invalids.append([idx[0], i])
-                                continue
-
-                            action_in = torch.LongTensor(1, 1).fill_(
-                                actions_in[0,
-                                           action_lengths[0] - i]).to(device)
-                        else:
-                            init_pos = eval_loader.dataset.episode_pos_queue[
-                                -i]
-                            hidden = model.nav_rnn.init_hidden(1)
-                            action_in = torch.LongTensor(1, 1).fill_(0).to(device)
-
-                        h3d.env.reset(
-                            x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
-
-                        init_dist_to_target = h3d.get_dist_to_target(
-                            h3d.env.cam.pos)
-                        if init_dist_to_target < 0:  # unreachable
-                            invalids.append([idx[0], i])
-                            continue
-
-                        img = h3d.env.render()
                         img = torch.from_numpy(img.transpose(
                             2, 0, 1)).float() / 255.0
                         img_feat_var = eval_loader.dataset.cnn(
-                            Variable(img.view(1, 3, 224, 224).to(device))).view(
-                                1, 1, 3200)
+                            Variable(img.view(1, 3, 224, 224)
+                                     .to(device))).view(1, 1, 3200)
+                        sub_img_feats_var = torch.cat(
+                            [sub_img_feats_var, img_feat_var], dim=1)
+                        sub_img_feats_var = sub_img_feats_var[:, -5:, :]
 
-                        episode_length = 0
-                        episode_done = True
+                        dists_to_target.append(
+                            h3d.get_dist_to_target(h3d.env.cam.pos))
+                        pos_queue.append([
+                            h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                            h3d.env.cam.pos.z, h3d.env.cam.yaw
+                        ])
 
-                        dists_to_target, pos_queue, actions = [
-                            init_dist_to_target
-                        ], [init_pos], []
-                        actual_pos_queue = [(h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw)]
+                        if episode_done == True:
+                            break
 
-                        for step in range(args.max_episode_length):
+                    # compute stats
+                    metrics_slug['d_0_' + str(i)] = dists_to_target[0]
+                    metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
+                    metrics_slug['d_D_' + str(
+                        i)] = dists_to_target[0] - dists_to_target[-1]
+                    metrics_slug['d_min_' + str(i)] = np.array(
+                        dists_to_target).min()
+                    metrics_slug['ep_len_' + str(i)] = episode_length
+                    if action == 3:
+                        metrics_slug['stop_' + str(i)] = 1
+                    else:
+                        metrics_slug['stop_' + str(i)] = 0
+                    inside_room = []
+                    for p in pos_queue:
+                        inside_room.append(
+                            h3d.is_inside_room(
+                                p, eval_loader.dataset.target_room))
+                    if inside_room[-1] == True:
+                        metrics_slug['r_T_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_T_' + str(i)] = 0
+                    if any([x == True for x in inside_room]) == True:
+                        metrics_slug['r_e_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_e_' + str(i)] = 0
 
-                            episode_length += 1
+                # collate and update metrics
+                metrics_list = []
+                for i in metrics.metric_names:
+                    if i not in metrics_slug:
+                        metrics_list.append(metrics.metrics[
+                            metrics.metric_names.index(i)][0])
+                    else:
+                        metrics_list.append(metrics_slug[i])
 
-                            if '+q' in args.model_type:
-                                scores, hidden = model(
-                                    img_feat_var,
-                                    question_var,
-                                    Variable(action_in),
-                                    False,
-                                    hidden=hidden,
-                                    step=True)
-                            else:
-                                scores, hidden = model(
-                                    img_feat_var,
-                                    False,
-                                    Variable(action_in),
-                                    False,
-                                    hidden=hidden,
-                                    step=True)
+                # update metrics
+                metrics.update(metrics_list)
 
-                            prob = F.softmax(scores, dim=1)
+            print(metrics.get_stat_string(mode=0))
+            print('invalids', len(invalids))
+            logging.info("EVAL: metrics: {}".format(metrics.get_stat_string(mode=0)))
+            logging.info("EVAL: invalids: {}".format(len(invalids)))
 
-                            action = int(prob.max(1)[1].data.cpu().numpy()[0])
+           # del h3d
+            eval_loader.dataset._load_envs()
+            if len(eval_loader.dataset.pruned_env_set) == 0:
+                done = True
 
-                            actions.append(action)
+    elif 'lstm' in args.model_type:
 
-                            img, _, episode_done = h3d.step(action)
+        done = False
 
-                            episode_done = episode_done or episode_length >= args.max_episode_length
+        while done == False:
 
+            if args.overfit:
+                metrics = NavMetric(
+                    info={'split': args.eval_split,
+                          'thread': rank},
+                    metric_names=[
+                        'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
+                        'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
+                        'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
+                        'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
+                        'ep_len_30', 'ep_len_50'
+                    ],
+                    log_json=args.output_log_path)
+
+            for batch in tqdm(eval_loader):
+
+                model.load_state_dict(shared_model.state_dict())
+                model.to(device)
+
+                idx, questions, answer, _, actions_in, actions_out, action_lengths, _ = batch
+                question_var = Variable(questions.to(device))
+                metrics_slug = {}
+
+                # evaluate at multiple initializations
+                for i in [10, 30, 50]:
+
+                    t += 1
+
+                    if action_lengths[0] - 1 - i < 0:
+                        invalids.append([idx[0], i])
+                        continue
+
+                    h3d = eval_loader.dataset.episode_house
+
+                    # forward through lstm till spawn
+                    if len(eval_loader.dataset.episode_pos_queue[:-i]
+                           ) > 0:
+                        images = eval_loader.dataset.get_frames(
+                            h3d,
+                            eval_loader.dataset.episode_pos_queue[:-i],
+                            preprocess=True)
+                        raw_img_feats = eval_loader.dataset.cnn(
+                            Variable(torch.FloatTensor(images).to(device)))
+
+                        actions_in_pruned = actions_in[:, :
+                                                       action_lengths[0] -
+                                                       i]
+                        actions_in_var = Variable(actions_in_pruned.to(device))
+                        action_lengths_pruned = action_lengths.clone(
+                        ).fill_(action_lengths[0] - i)
+                        img_feats_var = raw_img_feats.view(1, -1, 3200)
+
+                        if '+q' in args.model_type:
+                            scores, hidden = model(
+                                img_feats_var, question_var,
+                                actions_in_var,
+                                action_lengths_pruned.cpu().numpy())
+                        else:
+                            scores, hidden = model(
+                                img_feats_var, False, actions_in_var,
+                                action_lengths_pruned.cpu().numpy())
+                        try:
+                            init_pos = eval_loader.dataset.episode_pos_queue[
+                                -i]
+                        except:
+                            invalids.append([idx[0], i])
+                            continue
+
+                        action_in = torch.LongTensor(1, 1).fill_(
+                            actions_in[0,
+                                       action_lengths[0] - i]).to(device)
+                    else:
+                        init_pos = eval_loader.dataset.episode_pos_queue[
+                            -i]
+                        hidden = model.nav_rnn.init_hidden(1)
+                        action_in = torch.LongTensor(1, 1).fill_(0).to(device)
+
+                    h3d.env.reset(
+                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+
+                    init_dist_to_target = h3d.get_dist_to_target(
+                        h3d.env.cam.pos)
+                    if init_dist_to_target < 0:  # unreachable
+                        invalids.append([idx[0], i])
+                        continue
+
+                    img = h3d.env.render()
+                    img = torch.from_numpy(img.transpose(
+                        2, 0, 1)).float() / 255.0
+                    img_feat_var = eval_loader.dataset.cnn(
+                        Variable(img.view(1, 3, 224, 224).to(device))).view(
+                            1, 1, 3200)
+
+                    episode_length = 0
+                    episode_done = True
+
+                    dists_to_target, pos_queue, actions = [
+                        init_dist_to_target
+                    ], [init_pos], []
+                    actual_pos_queue = [(h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw)]
+
+                    for step in range(args.max_episode_length):
+
+                        episode_length += 1
+
+                        if '+q' in args.model_type:
+                            scores, hidden = model(
+                                img_feat_var,
+                                question_var,
+                                Variable(action_in),
+                                False,
+                                hidden=hidden,
+                                step=True)
+                        else:
+                            scores, hidden = model(
+                                img_feat_var,
+                                False,
+                                Variable(action_in),
+                                False,
+                                hidden=hidden,
+                                step=True)
+
+                        prob = F.softmax(scores, dim=1)
+
+                        action = int(prob.max(1)[1].data.cpu().numpy()[0])
+
+                        actions.append(action)
+
+                        img, _, episode_done = h3d.step(action)
+
+                        episode_done = episode_done or episode_length >= args.max_episode_length
+
+                        img = torch.from_numpy(img.transpose(
+                            2, 0, 1)).float() / 255.0
+                        img_feat_var = eval_loader.dataset.cnn(
+                            Variable(img.view(1, 3, 224, 224)
+                                     .to(device))).view(1, 1, 3200)
+
+                        action_in = torch.LongTensor(
+                            1, 1).fill_(action + 1).to(device)
+
+                        dists_to_target.append(
+                            h3d.get_dist_to_target(h3d.env.cam.pos))
+                        pos_queue.append([
+                            h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                            h3d.env.cam.pos.z, h3d.env.cam.yaw
+                        ])
+
+                        if episode_done == True:
+                            break
+
+                        actual_pos_queue.append([
+                            h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw])
+
+                    # compute stats
+                    metrics_slug['d_0_' + str(i)] = dists_to_target[0]
+                    metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
+                    metrics_slug['d_D_' + str(
+                        i)] = dists_to_target[0] - dists_to_target[-1]
+                    metrics_slug['d_min_' + str(i)] = np.array(
+                        dists_to_target).min()
+                    metrics_slug['ep_len_' + str(i)] = episode_length
+                    if action == 3:
+                        metrics_slug['stop_' + str(i)] = 1
+                    else:
+                        metrics_slug['stop_' + str(i)] = 0
+                    inside_room = []
+                    for p in pos_queue:
+                        inside_room.append(
+                            h3d.is_inside_room(
+                                p, eval_loader.dataset.target_room))
+                    if inside_room[-1] == True:
+                        metrics_slug['r_T_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_T_' + str(i)] = 0
+                    if any([x == True for x in inside_room]) == True:
+                        metrics_slug['r_e_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_e_' + str(i)] = 0
+
+                # collate and update metrics
+                metrics_list = []
+                for i in metrics.metric_names:
+                    if i not in metrics_slug:
+                        metrics_list.append(metrics.metrics[
+                            metrics.metric_names.index(i)][0])
+                    else:
+                        metrics_list.append(metrics_slug[i])
+
+                # update metrics
+                metrics.update(metrics_list)
+
+            print(metrics.get_stat_string(mode=0))
+            print('invalids', len(invalids))
+            logging.info("EVAL: init_steps: {} metrics: {}".format(i, metrics.get_stat_string(mode=0)))
+            logging.info("EVAL: init_steps: {} invalids: {}".format(i, len(invalids)))
+
+            # del h3d
+            eval_loader.dataset._load_envs()
+            print("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
+            logging.info("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
+            assert len(eval_loader.dataset.pruned_env_set) > 0
+            if len(eval_loader.dataset.pruned_env_set) == 0:
+                done = True
+
+    elif 'pacman' in args.model_type:
+        done = False
+        t = 0
+        while done == False:
+            
+            if args.overfit:
+                metrics = NavMetric(
+                    info={'split': args.eval_split,
+                          'thread': rank},
+                    metric_names=[
+                        'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
+                        'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
+                        'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
+                        'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
+                        'ep_len_30', 'ep_len_50'
+                    ],
+                    log_json=args.output_log_path)
+            #time_img = time.strftime("%m_%d_%H:%M")
+             
+            for num, batch in enumerate(tqdm(eval_loader)):
+
+                model.load_state_dict(shared_model.state_dict())
+                model.to(device)
+
+                idx, question, answer, actions, action_length = batch
+                metrics_slug = {}
+
+                #print('Question is ', question)
+                #print('answer is ', answer)
+
+                answeris = answer.item()
+
+                h3d = eval_loader.dataset.episode_house
+                # print("Target Room Is: ")
+                # print(eval_loader.dataset.target_room)
+                # print("Target Object Is: ")
+                # print(eval_loader.dataset.target_obj)
+
+                # evaluate at multiple initializations
+                video_dir = '../video/nav'
+                video_dir = os.path.join(video_dir,
+                                                   args.time_id + '_' + args.identifier)
+                cov_batch_i = []
+                for i in [10, 30, 50]:
+                    #Satyen suggests Himi changes ----> works
+                    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                    time_now = time.strftime("%m_%d_%H:%M")
+                    if args.render:
+                        video_name = '%s_video_%d_%d.avi' %(time_now, i, answeris)
+                        video = cv2.VideoWriter(video_name, fourcc, 5, (224, 224))
+
+                    if i > action_length[0]:
+                        invalids.append([idx[0], i])
+                        continue
+
+                    question_var = Variable(question.to(device))
+
+                    controller_step = False
+                    planner_hidden = model.planner_nav_rnn.init_hidden(1)
+
+                    # get hierarchical action history
+                    (
+                        planner_actions_in, planner_img_feats,
+                        controller_step, controller_action_in,
+                        controller_img_feats, init_pos,
+                        controller_action_counter
+                    ) = eval_loader.dataset.get_hierarchical_features_till_spawn(
+                        actions[0, :action_length[0] + 1].numpy(), i, args.max_controller_actions 
+                    )
+
+                    planner_actions_in_OH = Variable(oneHot(planner_actions_in, 4).to(device))
+                    # planner_actions_in_var = Variable(planner_actions_in.to(device))
+                    planner_img_feats_var = Variable(planner_img_feats.to(device))
+                
+                    # forward planner till spawn to update hidden state
+                    for step in range(planner_actions_in.size(0)):
+
+                        planner_scores, planner_hidden = model.planner_step(
+                            question_var, planner_img_feats_var[step]
+                            .unsqueeze(0).unsqueeze(0),
+                            planner_actions_in_OH[step].view(-1 ,1, 4),
+                            planner_hidden
+                        )
+
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+
+                    init_dist_to_target = h3d.get_dist_to_target(
+                        h3d.env.cam.pos)
+                    if init_dist_to_target < 0:  # unreachable
+                        invalids.append([idx[0], i])
+                        continue
+
+                    dists_to_target, pos_queue, pred_actions = [init_dist_to_target], [init_pos], []
+                    planner_actions, controller_actions = [], []
+
+                    episode_length = 0
+                    if args.max_controller_actions > 1:
+                        controller_action_counter = controller_action_counter % args.max_controller_actions 
+                        controller_action_counter = max(controller_action_counter - 1, 0)
+                    else:
+                        controller_action_counter = 0
+
+                    first_step = True
+                    first_step_is_controller = controller_step
+                    planner_step = True
+                    action = int(controller_action_in)
+
+                    for step in range(args.max_episode_length):
+                        if not first_step:
                             img = torch.from_numpy(img.transpose(
                                 2, 0, 1)).float() / 255.0
                             img_feat_var = eval_loader.dataset.cnn(
-                                Variable(img.view(1, 3, 224, 224)
-                                         .to(device))).view(1, 1, 3200)
-
-                            action_in = torch.LongTensor(
-                                1, 1).fill_(action + 1).to(device)
-
-                            dists_to_target.append(
-                                h3d.get_dist_to_target(h3d.env.cam.pos))
-                            pos_queue.append([
-                                h3d.env.cam.pos.x, h3d.env.cam.pos.y,
-                                h3d.env.cam.pos.z, h3d.env.cam.yaw
-                            ])
-
-                            if episode_done == True:
-                                break
-
-                            actual_pos_queue.append([
-                                h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw])
-
-                        # compute stats
-                        metrics_slug['d_0_' + str(i)] = dists_to_target[0]
-                        metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
-                        metrics_slug['d_D_' + str(
-                            i)] = dists_to_target[0] - dists_to_target[-1]
-                        metrics_slug['d_min_' + str(i)] = np.array(
-                            dists_to_target).min()
-                        metrics_slug['ep_len_' + str(i)] = episode_length
-                        if action == 3:
-                            metrics_slug['stop_' + str(i)] = 1
+                                Variable(img.view(1, 3, 224,
+                                                  224).to(device))).view(
+                                                      1, 1, 3200)
                         else:
-                            metrics_slug['stop_' + str(i)] = 0
-                        inside_room = []
-                        for p in pos_queue:
-                            inside_room.append(
-                                h3d.is_inside_room(
-                                    p, eval_loader.dataset.target_room))
-                        if inside_room[-1] == True:
-                            metrics_slug['r_T_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_T_' + str(i)] = 0
-                        if any([x == True for x in inside_room]) == True:
-                            metrics_slug['r_e_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_e_' + str(i)] = 0
+                            img_feat_var = Variable(controller_img_feats.to(device)).view(1, 1, 3200)
 
-                    # collate and update metrics
-                    metrics_list = []
-                    for i in metrics.metric_names:
-                        if i not in metrics_slug:
-                            metrics_list.append(metrics.metrics[
-                                metrics.metric_names.index(i)][0])
-                        else:
-                            metrics_list.append(metrics_slug[i])
+                        if not first_step or first_step_is_controller:
+                            # query controller to continue or not
+                            # controller_action_in = Variable(
+                            #     torch.LongTensor(1, 1).fill_(action).to(device))
+                            
+                            # Sati: Conver to oneHot here
+                            controller_action_var = Variable(torch.zeros(3).to(device))
+                            controller_action_var[controller_action_in] = 1
+                            # controller_action_in = Variable(oneHot(controller_action_, 3).to(device))
+                            # print("Controller_actions_in", controller_action_var, controller_action_var.size())
+                            
+                            controller_scores = model.controller_step(
+                                img_feat_var, 
+                                controller_action_var,
+                                planner_hidden[0])
+                            
+                            prob = F.softmax(controller_scores, dim=1)
+                            controller_action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
-                    # update metrics
-                    metrics.update(metrics_list)
-
-                print(metrics.get_stat_string(mode=0))
-                print('invalids', len(invalids))
-                logging.info("EVAL: init_steps: {} metrics: {}".format(i, metrics.get_stat_string(mode=0)))
-                logging.info("EVAL: init_steps: {} invalids: {}".format(i, len(invalids)))
-
-                # del h3d
-                eval_loader.dataset._load_envs()
-                print("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
-                logging.info("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
-                assert len(eval_loader.dataset.pruned_env_set) > 0
-                if len(eval_loader.dataset.pruned_env_set) == 0:
-                    done = True
-
-        elif 'pacman' in args.model_type:
-            done = False
-
-            while done == False:
-                if args.overfit:
-                    metrics = NavMetric(
-                        info={'split': args.eval_split,
-                              'thread': rank},
-                        metric_names=[
-                            'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
-                            'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
-                            'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
-                            'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
-                            'ep_len_30', 'ep_len_50'
-                        ],
-                        log_json=args.output_log_path)
-                #time_img = time.strftime("%m_%d_%H:%M")
-                
-                for num, batch in enumerate(tqdm(eval_loader)):
-
-                    model.load_state_dict(shared_model.state_dict())
-                    model.to(device)
-
-                    idx, question, answer, actions, action_length = batch
-                    metrics_slug = {}
-
-                    #print('Question is ', question)
-                    #print('answer is ', answer)
-
-                    answeris = answer.item()
-
-                    h3d = eval_loader.dataset.episode_house
-                    # print("Target Room Is: ")
-                    # print(eval_loader.dataset.target_room)
-                    # print("Target Object Is: ")
-                    # print(eval_loader.dataset.target_obj)
-
-                    # evaluate at multiple initializations
-                    video_dir = '../video/nav'
-                    video_dir = os.path.join(video_dir,
-                                                       args.time_id + '_' + args.identifier)
-                    for i in [10, 30, 50]:
-                        #Satyen suggests Himi changes ----> works
-                        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                        time_now = time.strftime("%m_%d_%H:%M")
-                        if args.render:
-                            video_name = '%s_video_%d_%d.avi' %(time_now, i, answeris)
-                            video = cv2.VideoWriter(video_name, fourcc, 5, (224, 224))
-
-                        t += 1
-
-                        if i > action_length[0]:
-                            invalids.append([idx[0], i])
-                            continue
-
-                        question_var = Variable(question.to(device))
-
-                        controller_step = False
-                        planner_hidden = model.planner_nav_rnn.init_hidden(1)
-
-                        # get hierarchical action history
-                        (
-                            planner_actions_in, planner_img_feats,
-                            controller_step, controller_action_in,
-                            controller_img_feats, init_pos,
-                            controller_action_counter
-                        ) = eval_loader.dataset.get_hierarchical_features_till_spawn(
-                            actions[0, :action_length[0] + 1].numpy(), i, args.max_controller_actions 
-                        )
-
-                        planner_actions_in_var = Variable(
-                            planner_actions_in.to(device))
-                        planner_img_feats_var = Variable(
-                            planner_img_feats.to(device))
-                    
-                        # forward planner till spawn to update hidden state
-                        for step in range(planner_actions_in.size(0)):
-
-                            planner_scores, planner_hidden = model.planner_step(
-                                question_var, planner_img_feats_var[step]
-                                .unsqueeze(0).unsqueeze(0),
-                                planner_actions_in_var[step].view(1, 1),
-                                planner_hidden
-                            )
-
-                        h3d.env.reset(
-                            x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
-
-                        init_dist_to_target = h3d.get_dist_to_target(
-                            h3d.env.cam.pos)
-                        if init_dist_to_target < 0:  # unreachable
-                            invalids.append([idx[0], i])
-                            continue
-
-                        dists_to_target, pos_queue, pred_actions = [
-                            init_dist_to_target
-                        ], [init_pos], []
-                        planner_actions, controller_actions = [], []
-
-                        episode_length = 0
-                        if args.max_controller_actions > 1:
-                            controller_action_counter = controller_action_counter % args.max_controller_actions 
-                            controller_action_counter = max(controller_action_counter - 1, 0)
-                        else:
-                            controller_action_counter = 0
-
-                        first_step = True
-                        first_step_is_controller = controller_step
-                        planner_step = True
-                        action = int(controller_action_in)
-
-                        for step in range(args.max_episode_length):
-                            if not first_step:
-                                img = torch.from_numpy(img.transpose(
-                                    2, 0, 1)).float() / 255.0
-                                img_feat_var = eval_loader.dataset.cnn(
-                                    Variable(img.view(1, 3, 224,
-                                                      224).to(device))).view(
-                                                          1, 1, 3200)
+                            if controller_action == 1 and controller_action_counter < args.max_controller_actions - 1:
+                                controller_action_counter += 1
+                                planner_step = False
                             else:
-                                img_feat_var = Variable(controller_img_feats.to(device)).view(1, 1, 3200)
-
-                            if not first_step or first_step_is_controller:
-                                # query controller to continue or not
-                                controller_action_in = Variable(
-                                    torch.LongTensor(1, 1).fill_(action).to(device))
-                                controller_scores = model.controller_step(
-                                    img_feat_var, controller_action_in,
-                                    planner_hidden[0])
-                                
-                                prob = F.softmax(controller_scores, dim=1)
-                                controller_action = int(
-                                    prob.max(1)[1].data.cpu().numpy()[0])
-
-                                if controller_action == 1 and controller_action_counter < args.max_controller_actions - 1:
-                                    controller_action_counter += 1
-                                    planner_step = False
-                                else:
-                                    controller_action_counter = 0
-                                    planner_step = True
-                                    controller_action = 0
-                            
-                                controller_actions.append(controller_action)
-                                first_step = False
-
-                            if planner_step:
-                                if not first_step:
-                                    action_in = torch.LongTensor(
-                                        1, 1).fill_(action + 1).to(device)
-                                    planner_scores, planner_hidden = model.planner_step(
-                                        question_var, img_feat_var,
-                                        Variable(action_in), planner_hidden)
-    
-                                prob = F.softmax(planner_scores, dim=1)
-                                action = int(
-                                    prob.max(1)[1].data.cpu().numpy()[0])
-                                planner_actions.append(action)
-
-                            episode_done = action == 3 or episode_length >= args.max_episode_length
-
-                            episode_length += 1
-                            dists_to_target.append(
-                                h3d.get_dist_to_target(h3d.env.cam.pos))
-                            pos_queue.append([
-                                h3d.env.cam.pos.x, h3d.env.cam.pos.y,
-                                h3d.env.cam.pos.z, h3d.env.cam.yaw
-                            ])
-                            
-			    
-                            if episode_done:
-                                break
-
-                            img, _, _ = h3d.step(action)
-                            #cv2.imwrite('{}-{}-{}-{}.png'.format(num, i, episode_length, time_img), img)
-                            if args.render:
-                                # cv2.imshow('window', img)
-                                # cv2.waitKey(100)
-                                video.write(img)
+                                controller_action_counter = 0
+                                planner_step = True
+                                controller_action = 0
+                        
+                            controller_actions.append(controller_action)
                             first_step = False
 
-                            
+                        if planner_step:
+                            if not first_step:
+                                action_in = Variable(torch.zeros(1, 1, 4).to(device))
+                                action_in[0, 0, action + 1] = 1
+                                # action_in = torch.LongTensor(1, 1).fill_(action + 1).to(device)
+                                # print("Action In:", action_in)
+                                
+                                planner_scores, planner_hidden = model.planner_step(
+                                    question_var,
+                                    img_feat_var,
+                                    action_in,
+                                    planner_hidden)
 
+                            prob = F.softmax(planner_scores, dim=1)
+                            action = int(prob.max(1)[1].data.cpu().numpy()[0])
+                            planner_actions.append(action)
+
+                        episode_done = action == 3 or episode_length >= args.max_episode_length
+
+                        episode_length += 1
+                        dists_to_target.append(
+                            h3d.get_dist_to_target(h3d.env.cam.pos))
+                        pos_queue.append([
+                            h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                            h3d.env.cam.pos.z, h3d.env.cam.yaw
+                        ])
+                        
+
+                        # Saty: semantic maps here
+                        target_obj = eval_loader.dataset.target_obj['fine_class']
+                        img_semantic = h3d.env.render(mode='semantic')
+                        cov = coverage(img_semantic, target_obj, semantic_classes)
+                        cov_batch_i.append(cov)
+                        
+                        if episode_done:
+                            cov_batch_i.append(target_obj)
+                            if num not in coverage_log[t].keys():
+                                coverage_log[t][num] = {}
+                            coverage_log[t][num].update({i:cov_batch_i})    
+                            break
+
+                        img, _, _ = h3d.step(action)
+                        #cv2.imwrite('{}-{}-{}-{}.png'.format(num, i, episode_length, time_img), img)
                         if args.render:
-                            video.release()
-                        # compute stats
-                        metrics_slug['d_0_' + str(i)] = dists_to_target[0]
-                        metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
-                        metrics_slug['d_D_' + str(
-                            i)] = dists_to_target[0] - dists_to_target[-1]
-                        metrics_slug['d_min_' + str(i)] = np.array(
-                            dists_to_target).min()
-                        metrics_slug['ep_len_' + str(i)] = episode_length
-                        if action == 3:
-                            metrics_slug['stop_' + str(i)] = 1
-                        else:
-                            metrics_slug['stop_' + str(i)] = 0
-                        inside_room = []
-                        for p in pos_queue:
-                            inside_room.append(
-                                h3d.is_inside_room(
-                                    p, eval_loader.dataset.target_room))
-                        if inside_room[-1] == True:
-                            metrics_slug['r_T_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_T_' + str(i)] = 0
-                        if any([x == True for x in inside_room]) == True:
-                            metrics_slug['r_e_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_e_' + str(i)] = 0
+                            # cv2.imshow('window', img)
+                            # cv2.waitKey(100)
+                            video.write(img)
+                        first_step = False
 
-                    # collate and update metrics
-                    metrics_list = []
-                    for i in metrics.metric_names:
-                        if i not in metrics_slug:
-                            metrics_list.append(metrics.metrics[
-                                metrics.metric_names.index(i)][0])
-                        else:
-                            metrics_list.append(metrics_slug[i])
+                        
 
-                    # update metrics
-                    metrics.update(metrics_list)
+                    if args.render:
+                        video.release()
+                    # compute stats
+                    metrics_slug['d_0_' + str(i)] = dists_to_target[0]
+                    metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
+                    metrics_slug['d_D_' + str(
+                        i)] = dists_to_target[0] - dists_to_target[-1]
+                    metrics_slug['d_min_' + str(i)] = np.array(
+                        dists_to_target).min()
+                    metrics_slug['ep_len_' + str(i)] = episode_length
+                    if action == 3:
+                        metrics_slug['stop_' + str(i)] = 1
+                    else:
+                        metrics_slug['stop_' + str(i)] = 0
+                    inside_room = []
+                    for p in pos_queue:
+                        inside_room.append(
+                            h3d.is_inside_room(
+                                p, eval_loader.dataset.target_room))
+                    if inside_room[-1] == True:
+                        metrics_slug['r_T_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_T_' + str(i)] = 0
+                    if any([x == True for x in inside_room]) == True:
+                        metrics_slug['r_e_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_e_' + str(i)] = 0
 
-                try:
-                    print(metrics.get_stat_string(mode=0))
-                    logging.info("EVAL: metrics: {}".format(metrics.get_stat_string(mode=0)))
-                except:
-                    pass
-                
-                print('epoch', epoch)
-                print('invalids', len(invalids))
-                logging.info("EVAL: epoch {}".format(epoch))
-                logging.info("EVAL: invalids {}".format(invalids))
+                # collate and update metrics
+                metrics_list = []
+                for i in metrics.metric_names:
+                    if i not in metrics_slug:
+                        metrics_list.append(metrics.metrics[
+                            metrics.metric_names.index(i)][0])
+                    else:
+                        metrics_list.append(metrics_slug[i])
 
-                # del h3d
-                eval_loader.dataset._load_envs()
-                if len(eval_loader.dataset.pruned_env_set) == 0:
-                    done = True
+                # update metrics
+                metrics.update(metrics_list)
 
-        epoch += 1
+            try:
+                print(metrics.get_stat_string(mode=0))
+                logging.info("EVAL: metrics: {}".format(metrics.get_stat_string(mode=0)))
+            except:
+                pass
+            
+            print('epoch', epoch)
+            print('invalids', len(invalids))
+            logging.info("EVAL: epoch {}".format(epoch))
+            logging.info("EVAL: invalids {}".format(invalids))
+
+            # del h3d
+            eval_loader.dataset._load_envs()
+            t +=1 
+            
+            if len(eval_loader.dataset.pruned_env_set) == 0:
+                done = True
 
         # checkpoint if best val loss
         if metrics.metrics[8][0] > best_eval_acc:  # d_D_50
             best_eval_acc = metrics.metrics[8][0]
-            if epoch % args.eval_every == 0 and args.to_log == 1:
+            if args.to_log == 1:
                 metrics.dump_log()
 
                 model_state = get_state(model)
@@ -761,6 +801,7 @@ def eval(rank, args, shared_model, best_eval_acc):
 
                 checkpoint_path = '%s/epoch_%d_d_D_50_%.04f.pt' % (
                     args.checkpoint_dir, epoch, best_eval_acc)
+                
                 print('Saving checkpoint to %s' % checkpoint_path)
                 logging.info("EVAL: Saving checkpoint to {}".format(checkpoint_path))
                 torch.save(checkpoint, checkpoint_path)
@@ -768,7 +809,12 @@ def eval(rank, args, shared_model, best_eval_acc):
         print('[best_eval_d_D_50:%.04f]' % best_eval_acc)
         logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
 
-        eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+        # Dump coverageLog as pkl file
+        # eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+        log_file = os.path.join(args.checkpoint_dir, 'coverage_log_{}.pkl'.format(epoch))
+        with open(log_file, "wb") as file_:
+            pkl.dump(coverage_log, file_)
+
     return best_eval_acc
 
 def train(rank, args, shared_model, resume_epoch = 0):
@@ -1085,17 +1131,16 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     controller_masks_var = controller_masks_var[perm_idx]
                     ###########################################################################
                     
-
-                    ############### CONVERT TO OH ##########################
-                    planner_actions_in_OH = Variable(oneHot(planner_actions_in_var, 4).cuda())
-                    
-                    pdb.set_trace()
+                    # This is all actions across a batch, from spawn till end. [batch_size, max_len_actions]
                     planner_scores, controller_scores, planner_hidden = model(
-                        questions_var, planner_img_feats_var,
-                        planner_actions_in_OH,
+                        questions_var, 
+                        planner_img_feats_var,
+                        planner_actions_in_var,
                         planner_action_lengths.cpu().numpy(),
-                        planner_hidden_idx_var, controller_img_feats_var,
-                        controller_actions_in_var, controller_action_lengths)
+                        planner_hidden_idx_var, 
+                        controller_img_feats_var,
+                        controller_actions_in_var, 
+                        controller_action_lengths)
 
                     planner_logprob = F.log_softmax(planner_scores, dim=1)
                     controller_logprob = F.log_softmax(controller_scores, dim=1)
@@ -1156,7 +1201,7 @@ def train(rank, args, shared_model, resume_epoch = 0):
 
         epoch += 1
         if epoch % args.eval_every ==0:
-            best_eval_acc = eval(rank,args,shared_model,  best_eval_acc)
+            best_eval_acc = eval(rank,args,shared_model,  best_eval_acc, epoch)
 
         if epoch % args.save_every == 0:
 
@@ -1179,7 +1224,6 @@ def train(rank, args, shared_model, resume_epoch = 0):
             print('Saving checkpoint to %s' % checkpoint_path)
             logging.info("TRAIN: Saving checkpoint to {}".format(checkpoint_path))
             torch.save(checkpoint, checkpoint_path)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

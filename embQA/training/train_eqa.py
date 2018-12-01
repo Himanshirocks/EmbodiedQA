@@ -28,11 +28,32 @@ from models import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab, flat_to_hierarchical_actions
 import cv2
 
-def oneHot(vec, dim):
-    batch_size = vec.size(0)
-    out = torch.zeros(batch_size, dim)
-    out[np.arange(batch_size), vec.long()] = 1
-    return out
+import csv
+def load_semantic_classes(color_file):
+    if color_file is None:
+        raise ValueError('please input colormap_fine.csv file')
+
+    semantic_classes = {}
+
+    with open(color_file) as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                # OpenCV is in BGR Format
+                c = np.array((row['r'], row['g'], row['b']), dtype=np.uint8)
+                fine_cat = row['name'].lower()
+                semantic_classes[fine_cat] = c
+
+    return semantic_classes
+
+
+def coverage(img, target_obj_class, semantic_classes):
+    
+    hei, wid, _ = img.shape
+    trgt_obj_col = semantic_classes[target_obj_class]
+    mask = np.all(img == trgt_obj_col, axis=2)
+    cov = np.sum(mask)/(hei * wid)
+    
+    return cov
 
 def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=0):
 
@@ -73,337 +94,365 @@ def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=
     args.output_ans_log_path = os.path.join(args.log_dir,
                                             'ans_eval_' + str(rank) + '.json')
 
-    t, epoch = 0, 0
+    t = 0
 
-    while epoch < int(args.max_epochs): #Himi changes
-        print('###############################')
-        print('[eval] Epoch is:', epoch)
-        print('###############################')
+    print('###############################')
+    print('[eval] Epoch is:', epoch)
+    print('###############################')
 
-        start_time = time.time()
-        invalids = []
+    start_time = time.time()
+    invalids = []
 
-        nav_model.load_state_dict(shared_nav_model.state_dict())
-        nav_model.eval()
+    nav_model.load_state_dict(shared_nav_model.state_dict())
+    nav_model.eval()
 
-        ans_model.load_state_dict(shared_ans_model.state_dict())
-        ans_model.eval()
-        ans_model.cuda()
+    ans_model.load_state_dict(shared_ans_model.state_dict())
+    ans_model.eval()
+    ans_model.cuda()
 
-        # that's a lot of numbers
-        nav_metrics = NavMetric(
-            info={'split': args.eval_split,
-                  'thread': rank},
-            metric_names=[
-                'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
-                'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
-                'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
-                'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
-                'ep_len_30', 'ep_len_50'
-            ],
-            log_json=args.output_nav_log_path)
+    # that's a lot of numbers
+    nav_metrics = NavMetric(
+        info={'split': args.eval_split,
+              'thread': rank},
+        metric_names=[
+            'd_0_10', 'd_0_30', 'd_0_50', 'd_T_10', 'd_T_30', 'd_T_50',
+            'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
+            'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
+            'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
+            'ep_len_30', 'ep_len_50'
+        ],
+        log_json=args.output_nav_log_path)
 
-        vqa_metrics = VqaMetric(
-            info={'split': args.eval_split,
-                  'thread': rank},
-            metric_names=[
-                'accuracy_10', 'accuracy_30', 'accuracy_50', 'mean_rank_10',
-                'mean_rank_30', 'mean_rank_50', 'mean_reciprocal_rank_10',
-                'mean_reciprocal_rank_30', 'mean_reciprocal_rank_50'
-            ],
-            log_json=args.output_ans_log_path)
+    vqa_metrics = VqaMetric(
+        info={'split': args.eval_split,
+              'thread': rank},
+        metric_names=[
+            'accuracy_10', 'accuracy_30', 'accuracy_50', 'mean_rank_10',
+            'mean_rank_30', 'mean_rank_50', 'mean_reciprocal_rank_10',
+            'mean_reciprocal_rank_30', 'mean_reciprocal_rank_50'
+        ],
+        log_json=args.output_ans_log_path)
 
-        if 'pacman' in args.model_type:
-            print('[eval] In If Pacman Condition')
-            done = False
+    if 'pacman' in args.model_type:
+        
+        print('[eval] In If Pacman Condition')
+        done = False
 
-            while done == False:
+        while done == False:
 
-                for batch in tqdm(eval_loader):
+            cov_all_log = []
+            for batch in tqdm(eval_loader):
 
-                    nav_model.load_state_dict(shared_nav_model.state_dict())
-                    nav_model.eval()
-                    nav_model.cuda()
+                nav_model.load_state_dict(shared_nav_model.state_dict())
+                nav_model.eval()
+                nav_model.cuda()
 
-                    idx, question, answer, actions, action_length = batch
-                    metrics_slug = {}
-                    print('question is: ', question)
-                    print('answer is: ', answer)
-                    h3d = eval_loader.dataset.episode_house
-                    
-                    ##########
-                    #Sai analysis
-                    # pdb.set_trace()
-                    #print("Question idx ",idx)
-                    if 364909 in idx:
-                        pass
-                        #print("Question changed")
-                        #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                idx, question, answer, actions, action_length = batch
+                metrics_slug = {}
+                print('question is: ', question)
+                print('answer is: ', answer)
+                h3d = eval_loader.dataset.episode_house
+                
+                ##########
+                #Sai analysis
+                # pdb.set_trace()
+                #print("Question idx ",idx)
+                if 364909 in idx:
+                    pass
+                    #print("Question changed")
+                    #question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
+                else:
+                    print("Question idx ",idx)
+                    #print("not the selected question")
+                    #sys.exit(1)
+                ##########
+                
+                # evaluate at multiple initializations
+                cov_log = []
+                for i in [10, 30, 50]:
+
+                    t += 1
+
+                    if i > action_length[0]:
+                        invalids.append([idx[0], i])
+                        continue
+
+                    question_var = Variable(question.cuda())
+
+                    controller_step = False
+                    planner_hidden = nav_model.planner_nav_rnn.init_hidden(
+                        1)
+
+                    # forward through planner till spawn
+                    (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, controller_action_counter) = eval_loader.dataset.get_hierarchical_features_till_spawn(
+                        actions[0, :action_length[0] + 1].numpy(), i)
+
+                    planner_actions_in_var = Variable(
+                        planner_actions_in.cuda())
+                    planner_img_feats_var = Variable(
+                        planner_img_feats.cuda())
+
+                    for step in range(planner_actions_in.size(0)):
+
+                        planner_scores, planner_hidden = nav_model.planner_step(
+                            question_var, planner_img_feats_var[step].view(
+                                1, 1,
+                                3200), planner_actions_in_var[step].view(
+                                    1, 1), planner_hidden)
+
+                    if controller_step == True:
+
+                        controller_img_feat_var = Variable(
+                            controller_img_feat.cuda())
+                        controller_action_in_var = Variable(
+                            torch.LongTensor(1, 1).fill_(
+                                int(controller_action_in)).cuda())
+
+                        controller_scores = nav_model.controller_step(
+                            controller_img_feat_var.view(1, 1, 3200),
+                            controller_action_in_var.view(1, 1),
+                            planner_hidden[0])
+
+                        prob = F.softmax(controller_scores, dim=1)
+                        controller_action = int(
+                            prob.max(1)[1].data.cpu().numpy()[0])
+
+                        if controller_action == 1:
+                            controller_step = True
+                        else:
+                            controller_step = False
+
+                        action = int(controller_action_in)
+                        action_in = torch.LongTensor(
+                            1, 1).fill_(action + 1).cuda()
+
                     else:
-                        print("Question idx ",idx)
-                        #print("not the selected question")
-                        #sys.exit(1)
-                    ##########
-                    
-                    # evaluate at multiple initializations
-                    for i in [10, 30, 50]:
 
-                        t += 1
+                        prob = F.softmax(planner_scores, dim=1)
+                        action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
-                        if i > action_length[0]:
-                            invalids.append([idx[0], i])
-                            continue
+                        action_in = torch.LongTensor(
+                            1, 1).fill_(action + 1).cuda()
 
-                        question_var = Variable(question.cuda())
+                    h3d.env.reset(
+                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
-                        controller_step = False
-                        planner_hidden = nav_model.planner_nav_rnn.init_hidden(
-                            1)
+                    init_dist_to_target = h3d.get_dist_to_target(
+                        h3d.env.cam.pos)
+                    if init_dist_to_target < 0:  # unreachable
+                        invalids.append([idx[0], i])
+                        continue
 
-                        # forward through planner till spawn
-                        (planner_actions_in, planner_img_feats, controller_step, controller_action_in, controller_img_feat, init_pos, controller_action_counter) = eval_loader.dataset.get_hierarchical_features_till_spawn(
-                            actions[0, :action_length[0] + 1].numpy(), i)
+                    episode_length = 0
+                    episode_done = True
+                    controller_action_counter = 0
 
-                        planner_actions_in_var = Variable(
-                            planner_actions_in.cuda())
-                        planner_img_feats_var = Variable(
-                            planner_img_feats.cuda())
+                    dists_to_target, pos_queue, pred_actions = [
+                        init_dist_to_target
+                    ], [init_pos], []
+                    planner_actions, controller_actions = [], []
 
-                        for step in range(planner_actions_in.size(0)):
+                    cov_avg = []
+                    if action != 3:
 
-                            planner_scores, planner_hidden = nav_model.planner_step(
-                                question_var, planner_img_feats_var[step].view(
-                                    1, 1,
-                                    3200), planner_actions_in_var[step].view(
-                                        1, 1), planner_hidden)
+                        # take the first step
+                        img, rew, _ = h3d.step(action)
+                        img = torch.from_numpy(img.transpose(
+                            2, 0, 1)).float() / 255.0
+                        img_feat_var = eval_loader.dataset.cnn(
+                            Variable(img.view(1, 3, 224,
+                                              224).cuda())).view(
+                                                  1, 1, 3200)
 
-                        if controller_step == True:
+                        for step in range(args.max_episode_length):
 
-                            controller_img_feat_var = Variable(
-                                controller_img_feat.cuda())
-                            controller_action_in_var = Variable(
-                                torch.LongTensor(1, 1).fill_(
-                                    int(controller_action_in)).cuda())
+                            episode_length += 1
 
+                            if controller_step == False:
+                                planner_scores, planner_hidden = nav_model.planner_step(
+                                    question_var, img_feat_var,
+                                    Variable(action_in), planner_hidden)
+
+                                prob = F.softmax(planner_scores, dim=1)
+                                action = int(prob.max(1)[1].data.cpu().numpy()[0])
+                                planner_actions.append(action)
+
+                            pred_actions.append(action)
+                            img, rew, episode_done = h3d.step(action)
+                            cov_avg.append(rew) 
+                            episode_done = episode_done or episode_length >= args.max_episode_length
+
+                            img = torch.from_numpy(img.transpose(
+                                2, 0, 1)).float() / 255.0
+                            img_feat_var = eval_loader.dataset.cnn(
+                                Variable(img.view(1, 3, 224, 224)
+                                         .cuda())).view(1, 1, 3200)
+
+                            dists_to_target.append(
+                                h3d.get_dist_to_target(h3d.env.cam.pos))
+                            pos_queue.append([
+                                h3d.env.cam.pos.x, h3d.env.cam.pos.y,
+                                h3d.env.cam.pos.z, h3d.env.cam.yaw
+                            ])
+
+                            if episode_done == True:
+                                #Get last 5 coverage values
+                                last_5_cov = np.mean(np.array(cov_avg[-5:]))
+                                cov_log.append(last_5_cov)
+                                break
+
+                            # query controller to continue or not
+                            controller_action_in = Variable(
+                                torch.LongTensor(1,1).fill_(action).cuda())
+                            
                             controller_scores = nav_model.controller_step(
-                                controller_img_feat_var.view(1, 1, 3200),
-                                controller_action_in_var.view(1, 1),
+                                img_feat_var, controller_action_in,
                                 planner_hidden[0])
 
                             prob = F.softmax(controller_scores, dim=1)
                             controller_action = int(
                                 prob.max(1)[1].data.cpu().numpy()[0])
 
-                            if controller_action == 1:
+                            if controller_action == 1 and controller_action_counter < 4:
+                                controller_action_counter += 1
                                 controller_step = True
                             else:
+                                controller_action_counter = 0
                                 controller_step = False
+                                controller_action = 0
 
-                            action = int(controller_action_in)
-                            action_in = torch.LongTensor(
-                                1, 1).fill_(action + 1).cuda()
+                            controller_actions.append(controller_action)
 
-                        else:
+                            action_in = torch.LongTensor(1, 1).fill_(action + 1).cuda()
 
-                            prob = F.softmax(planner_scores, dim=1)
-                            action = int(prob.max(1)[1].data.cpu().numpy()[0])
+                    # run answerer here
+                    if len(pos_queue) < 5:
+                        pos_queue = eval_loader.dataset.episode_pos_queue[len(
+                            pos_queue) - 5:] + pos_queue
+                    images = eval_loader.dataset.get_frames(
+                        h3d, pos_queue[-5:], preprocess=True)
 
-                            action_in = torch.LongTensor(
-                                1, 1).fill_(action + 1).cuda()
+                    #print((images.shape))
 
-                        h3d.env.reset(
-                            x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
-
-                        init_dist_to_target = h3d.get_dist_to_target(
-                            h3d.env.cam.pos)
-                        if init_dist_to_target < 0:  # unreachable
-                            invalids.append([idx[0], i])
-                            continue
-
-                        episode_length = 0
-                        episode_done = True
-                        controller_action_counter = 0
-
-                        dists_to_target, pos_queue, pred_actions = [
-                            init_dist_to_target
-                        ], [init_pos], []
-                        planner_actions, controller_actions = [], []
-
-                        if action != 3:
-
-                            # take the first step
-                            img, _, _ = h3d.step(action)
-                            img = torch.from_numpy(img.transpose(
-                                2, 0, 1)).float() / 255.0
-                            img_feat_var = eval_loader.dataset.cnn(
-                                Variable(img.view(1, 3, 224,
-                                                  224).cuda())).view(
-                                                      1, 1, 3200)
-
-                            for step in range(args.max_episode_length):
-
-                                episode_length += 1
-
-                                if controller_step == False:
-                                    planner_scores, planner_hidden = nav_model.planner_step(
-                                        question_var, img_feat_var,
-                                        Variable(action_in), planner_hidden)
-
-                                    prob = F.softmax(planner_scores, dim=1)
-                                    action = int(
-                                        prob.max(1)[1].data.cpu().numpy()[0])
-                                    planner_actions.append(action)
-
-                                pred_actions.append(action)
-                                img, _, episode_done = h3d.step(action)
-
-                                episode_done = episode_done or episode_length >= args.max_episode_length
-
-                                img = torch.from_numpy(img.transpose(
-                                    2, 0, 1)).float() / 255.0
-                                img_feat_var = eval_loader.dataset.cnn(
-                                    Variable(img.view(1, 3, 224, 224)
-                                             .cuda())).view(1, 1, 3200)
-
-                                dists_to_target.append(
-                                    h3d.get_dist_to_target(h3d.env.cam.pos))
-                                pos_queue.append([
-                                    h3d.env.cam.pos.x, h3d.env.cam.pos.y,
-                                    h3d.env.cam.pos.z, h3d.env.cam.yaw
-                                ])
-
-                                if episode_done == True:
-                                    break
-
-                                # query controller to continue or not
-                                controller_action_in = Variable(
-                                    torch.LongTensor(1,
-                                                     1).fill_(action).cuda())
-                                controller_scores = nav_model.controller_step(
-                                    img_feat_var, controller_action_in,
-                                    planner_hidden[0])
-
-                                prob = F.softmax(controller_scores, dim=1)
-                                controller_action = int(
-                                    prob.max(1)[1].data.cpu().numpy()[0])
-
-                                if controller_action == 1 and controller_action_counter < 4:
-                                    controller_action_counter += 1
-                                    controller_step = True
-                                else:
-                                    controller_action_counter = 0
-                                    controller_step = False
-                                    controller_action = 0
-
-                                controller_actions.append(controller_action)
-
-                                action_in = torch.LongTensor(
-                                    1, 1).fill_(action + 1).cuda()
-
-                        # run answerer here
-                        if len(pos_queue) < 5:
-                            pos_queue = eval_loader.dataset.episode_pos_queue[len(
-                                pos_queue) - 5:] + pos_queue
-                        images = eval_loader.dataset.get_frames(
-                            h3d, pos_queue[-5:], preprocess=True)
-
-                        #print((images.shape))
-
-                        #for i, img in enumerate(images):
-                        #    img = np.transpose(img, axes=(2,1,0))
-                        #    cv2.imwrite('image_{}.png'.format(i),img)
+                    #for i, img in enumerate(images):
+                    #    img = np.transpose(img, axes=(2,1,0))
+                    #    cv2.imwrite('image_{}.png'.format(i),img)
 
 
-                        images_var = Variable(
-                            torch.from_numpy(images).cuda()).view(
-                                1, 5, 3, 224, 224)
-                        scores, att_probs = ans_model(images_var, question_var)
-                        ans_acc, ans_rank = vqa_metrics.compute_ranks(
-                            scores.data.cpu(), answer)
+                    images_var = Variable(
+                        torch.from_numpy(images).cuda()).view(
+                            1, 5, 3, 224, 224)
+                    scores, att_probs = ans_model(images_var, question_var)
+                    ans_acc, ans_rank = vqa_metrics.compute_ranks(
+                        scores.data.cpu(), answer)
 
-                        pred_answer = scores.max(1)[1].data[0]
-                        #Himi changes for the awful keyerror
-                        questionIdToToken = eval_loader.dataset.vocab['questionIdxToToken']
-                        print('[Q_GT]', ' '.join([eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question[0] if x != 0]))
-                        print('[A_GT]', ' '.join([eval_loader.dataset.vocab['answerIdxToToken'][answer[0].item()]]))
-                        print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
-                        #Himi 
-                        #print('Acc is: ', ans_acc)
-                        #if 1 in ans_acc:
-                        #    print("ACCURACY 1")
-                        #print('Mean Rank Is: ', ans_rank)
-                        # print(pred_answer)
-                        # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
+                    pred_answer = scores.max(1)[1].data[0]
+                    #Himi changes for the awful keyerror
+                    questionIdToToken = eval_loader.dataset.vocab['questionIdxToToken']
+                    print('[Q_GT]', ' '.join([eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question[0] if x != 0]))
+                    print('[A_GT]', ' '.join([eval_loader.dataset.vocab['answerIdxToToken'][answer[0].item()]]))
+                    print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][pred_answer.item()])
+                    #Himi 
+                    #print('Acc is: ', ans_acc)
+                    #if 1 in ans_acc:
+                    #    print("ACCURACY 1")
+                    #print('Mean Rank Is: ', ans_rank)
+                    # print(pred_answer)
+                    # print('[A_PRED]', eval_loader.dataset.vocab['answerIdxToToken'][8])
 
-                        # compute stats
-                        metrics_slug['accuracy_' + str(i)] = ans_acc[0]
-                        metrics_slug['mean_rank_' + str(i)] = ans_rank[0]
-                        metrics_slug['mean_reciprocal_rank_'
-                                     + str(i)] = 1.0 / ans_rank[0]
+                    # compute stats
+                    metrics_slug['accuracy_' + str(i)] = ans_acc[0]
+                    metrics_slug['mean_rank_' + str(i)] = ans_rank[0]
+                    metrics_slug['mean_reciprocal_rank_'
+                                 + str(i)] = 1.0 / ans_rank[0]
 
-                        metrics_slug['d_0_' + str(i)] = dists_to_target[0]
-                        metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
-                        metrics_slug['d_D_' + str(
-                            i)] = dists_to_target[0] - dists_to_target[-1]
-                        metrics_slug['d_min_' + str(i)] = np.array(
-                            dists_to_target).min()
-                        metrics_slug['ep_len_' + str(i)] = episode_length
-                        if action == 3:
-                            metrics_slug['stop_' + str(i)] = 1
-                        else:
-                            metrics_slug['stop_' + str(i)] = 0
-                        inside_room = []
-                        for p in pos_queue:
-                            inside_room.append(
-                                h3d.is_inside_room(
-                                    p, eval_loader.dataset.target_room))
-                        if inside_room[-1] == True:
-                            metrics_slug['r_T_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_T_' + str(i)] = 0
-                        if any([x == True for x in inside_room]) == True:
-                            metrics_slug['r_e_' + str(i)] = 1
-                        else:
-                            metrics_slug['r_e_' + str(i)] = 0
+                    metrics_slug['d_0_' + str(i)] = dists_to_target[0]
+                    metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
+                    metrics_slug['d_D_' + str(
+                        i)] = dists_to_target[0] - dists_to_target[-1]
+                    metrics_slug['d_min_' + str(i)] = np.array(
+                        dists_to_target).min()
+                    metrics_slug['ep_len_' + str(i)] = episode_length
+                    if action == 3:
+                        metrics_slug['stop_' + str(i)] = 1
+                    else:
+                        metrics_slug['stop_' + str(i)] = 0
+                    inside_room = []
+                    for p in pos_queue:
+                        inside_room.append(
+                            h3d.is_inside_room(
+                                p, eval_loader.dataset.target_room))
+                    if inside_room[-1] == True:
+                        metrics_slug['r_T_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_T_' + str(i)] = 0
+                    if any([x == True for x in inside_room]) == True:
+                        metrics_slug['r_e_' + str(i)] = 1
+                    else:
+                        metrics_slug['r_e_' + str(i)] = 0
 
-                    # navigation metrics
-                    metrics_list = []
-                    for i in nav_metrics.metric_names:
-                        if i not in metrics_slug:
-                            metrics_list.append(nav_metrics.metrics[
-                                nav_metrics.metric_names.index(i)][0])
-                        else:
-                            metrics_list.append(metrics_slug[i])
+                cov_all_i = np.mean(np.array(cov_log))
+                cov_all_log.append(cov_all_i)
+                print("Average coverage for this env:", cov_all_i)
+                
+                # navigation metrics
+                metrics_list = []
+                for i in nav_metrics.metric_names:
+                    if i not in metrics_slug:
+                        metrics_list.append(nav_metrics.metrics[
+                            nav_metrics.metric_names.index(i)][0])
+                    else:
+                        metrics_list.append(metrics_slug[i])
 
-                    nav_metrics.update(metrics_list)
+                nav_metrics.update(metrics_list)
 
-                    # vqa metrics
-                    metrics_list = []
-                    for i in vqa_metrics.metric_names:
-                        if i not in metrics_slug:
-                            metrics_list.append(vqa_metrics.metrics[
-                                vqa_metrics.metric_names.index(i)][0])
-                        else:
-                            metrics_list.append(metrics_slug[i])
+                # vqa metrics
+                metrics_list = []
+                for i in vqa_metrics.metric_names:
+                    if i not in metrics_slug:
+                        metrics_list.append(vqa_metrics.metrics[
+                            vqa_metrics.metric_names.index(i)][0])
+                    else:
+                        metrics_list.append(metrics_slug[i])
 
-                    vqa_metrics.update(metrics_list)
+                vqa_metrics.update(metrics_list)
 
-                try:
-                    print(nav_metrics.get_stat_string(mode=0))
-                    print(vqa_metrics.get_stat_string(mode=0))
-                except:
-                    pass
+            try:
+                print(nav_metrics.get_stat_string(mode=0))
+                print(vqa_metrics.get_stat_string(mode=0))
+            except:
+                pass
 
-                print('epoch', epoch)
-                print('invalids', len(invalids))
+            print('epoch', epoch)
+            print('invalids', len(invalids))
 
-                eval_loader.dataset._load_envs()
-                if len(eval_loader.dataset.pruned_env_set) == 0:
-                    done = True
+            eval_loader.dataset._load_envs()
+            if len(eval_loader.dataset.pruned_env_set) == 0:
+                done = True
+    print(" Average last 5 coverge:", np.mean(np.array(cov_all_log[-5:])))
+    # checkpoints always #Himi changes
+    if epoch % args.eval_every == 0 and args.to_log == 1:
+        vqa_metrics.dump_log()
+        nav_metrics.dump_log()
 
-        epoch += 1
+        model_state = get_state(nav_model)
 
-        # checkpoints always #Himi changes
+        aad = dict(args.__dict__)
+        ad = {}
+        for i in aad:
+            if i[0] != '_':
+                ad[i] = aad[i]
+
+        checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+
+        checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
+            args.checkpoint_dir, epoch, best_eval_acc)
+        print('Saving checkpoint to %s' % checkpoint_path)
+        torch.save(checkpoint, checkpoint_path) 
+    
+    # checkpoint if best val accuracy
+    if vqa_metrics.metrics[2][0] > best_eval_acc:  # ans_acc_50
+        best_eval_acc = vqa_metrics.metrics[2][0]
         if epoch % args.eval_every == 0 and args.to_log == 1:
             vqa_metrics.dump_log()
             nav_metrics.dump_log()
@@ -421,32 +470,11 @@ def eval(rank, args, shared_nav_model, shared_ans_model, best_eval_acc=0, epoch=
             checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
                 args.checkpoint_dir, epoch, best_eval_acc)
             print('Saving checkpoint to %s' % checkpoint_path)
-            torch.save(checkpoint, checkpoint_path) 
-        # checkpoint if best val accuracy
-        if vqa_metrics.metrics[2][0] > best_eval_acc:  # ans_acc_50
-            best_eval_acc = vqa_metrics.metrics[2][0]
-            if epoch % args.eval_every == 0 and args.to_log == 1:
-                vqa_metrics.dump_log()
-                nav_metrics.dump_log()
+            torch.save(checkpoint, checkpoint_path)
 
-                model_state = get_state(nav_model)
+    print('[best_eval_ans_acc_50:%.04f]' % best_eval_acc)
 
-                aad = dict(args.__dict__)
-                ad = {}
-                for i in aad:
-                    if i[0] != '_':
-                        ad[i] = aad[i]
-
-                checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
-
-                checkpoint_path = '%s/epoch_%d_ans_50_%.04f.pt' % (
-                    args.checkpoint_dir, epoch, best_eval_acc)
-                print('Saving checkpoint to %s' % checkpoint_path)
-                torch.save(checkpoint, checkpoint_path)
-
-        print('[best_eval_ans_acc_50:%.04f]' % best_eval_acc)
-
-        eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+    # eval_loader.dataset._load_envs(start_idx=0, in_order=True)
     return best_eval_acc
 
 def train(rank, args, shared_nav_model, shared_ans_model):
@@ -570,18 +598,14 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                     planner_img_feats_var = Variable(planner_img_feats.cuda())
                     
                     # Sati: Run Planner till target_pos_idx -> This is from get_hierarchical_features... 
-                    # need T-1 hidden state for planner! -> GT img_feats, Actions and question!                   
+                    # need T-1 hidden state for planner! -> GT img_feats, Actions and question                   
                     for step in range(planner_actions_in.size(0)):
-
-                        # Sati: Make into one-Hot
-                        planner_actions_in_OH = oneHot(planner_actions_in_var[step].view(1,1), 4)
-
 
                         planner_scores, planner_hidden = \
                         nav_model.planner_step(
                             question_var,
                             planner_img_feats_var[step].view(1, 1, 3200), 
-                            planner_actions_in_OH, 
+                            planner_actions_in_var[step].view(1,1), 
                             planner_hidden)
 
                     if controller_step == True:
@@ -589,14 +613,11 @@ def train(rank, args, shared_nav_model, shared_ans_model):
                         controller_img_feat_var = Variable(controller_img_feat.cuda())
                         controller_action_in_var = torch.LongTensor(1, 1).fill_(int(controller_action_in)).cuda()
 
-                        controller_action_in_OH = Variable(oneHot(controller_action_in_var, 3).cuda())
-
                         controller_scores = nav_model.controller_step(
                             controller_img_feat_var.view(1, 1, 3200),
-                            controller_action_in_OH,
+                            controller_action_in_var,
                             planner_hidden[0])
-                        import pdb; pdb.set_trace()
-                        
+
                         prob = F.softmax(controller_scores, dim=1)
                         controller_action = int(prob.max(1)[1].data.cpu().numpy()[0])
 
@@ -619,7 +640,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                     init_dist_to_target = h3d.get_dist_to_target(h3d.env.cam.pos)
                     if init_dist_to_target < 0:  # unreachable
-                        invalids.append([idx[0], i])
+                        # invalids.append([idx[0], i])
                         continue
 
                     episode_length = 0
@@ -663,6 +684,7 @@ def train(rank, args, shared_nav_model, shared_ans_model):
 
                                 action = int(action.cpu().numpy()[0, 0])
                                 planner_actions.append(action)
+
 
                             img, rwd, episode_done = h3d.step(action, step_reward=True)
 

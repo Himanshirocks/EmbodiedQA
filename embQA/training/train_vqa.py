@@ -121,7 +121,7 @@ def eval(rank, args, shared_model, best_eval_acc=0,  checkpoint=None, epoch = 0)
                 scores_numpy = scores.data.cpu().numpy()
                 att_probs_numpy = att_probs.data.cpu().numpy()
                 loss = lossFn(scores, answers_var)
-
+                pdb.set_trace()
                 # update metrics
                 accuracy, ranks = metrics.compute_ranks(
                     scores.data.cpu(), answers)
@@ -294,8 +294,8 @@ def train(rank, args, shared_model):
                 #p+=1
                 for num, batch in enumerate(train_loader):
                     #pp=0
-                         done = True
-                         break
+                         #done = True
+                         #break
 
                     model.load_state_dict(shared_model.state_dict())
                     model.cuda()
@@ -346,11 +346,11 @@ def train(rank, args, shared_model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # data params
-    parser.add_argument('-train_h5', default='data/train.h5')
-    parser.add_argument('-val_h5', default='data/val.h5')
-    parser.add_argument('-test_h5', default='data/test.h5')
-    parser.add_argument('-data_json', default='data/data.json')
-    parser.add_argument('-vocab_json', default='data/vocab.json')
+    parser.add_argument('-train_h5', default='data/pruned_train.h5')
+    parser.add_argument('-val_h5', default='data/pruned_val.h5')
+    parser.add_argument('-test_h5', default='data/pruned_test.h5')
+    parser.add_argument('-data_json', default='data/pruned_data.json')
+    parser.add_argument('-vocab_json', default='data/pruned_vocab.json')
 
     parser.add_argument('-train_cache_path', default=False)
     parser.add_argument('-val_cache_path', default=False)

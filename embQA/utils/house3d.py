@@ -30,7 +30,7 @@ class House3DUtils():
             load_semantic_classes=True,
             collision_reward=0.0,
             success_reward=1.0,
-            dist_reward_scale=0.005,
+            dist_reward_scale=10,
             seeing_rwd=False):
         self.env = env
         self.debug = debug
@@ -71,6 +71,18 @@ class House3DUtils():
         if load_semantic_classes == True:
             self._load_semantic_classes()
 
+
+    # Saty: INtegrate coverage into
+    def coverage(self, img, target_obj_class):
+
+        
+        hei, wid, _ = img.shape
+        trgt_obj_col = self.semantic_classes[target_obj_class]
+        mask = np.all(img == trgt_obj_col, axis=2)
+        cov = np.sum(mask)/(hei * wid)
+        
+        return cov
+
     # Shortest paths are computed in 1000 x 1000 grid coordinates.
     # One step in the SUNCG continuous coordinate system however, can be
     # multiple grids in the grid coordinate system (since turns aren't 90 deg).
@@ -80,9 +92,13 @@ class House3DUtils():
     #
     # For now, we first explicitly calibrate how many steps in the gridworld
     # correspond to one step in continuous world, across all directions
+    
+
     def calibrate_steps(self, reset=True):
         mults, angle_map = [], {}
 
+        # Saty: Maps difference of before yaw and after change in yaw (x2-x1, y2-y1) as an angle
+        # or direction. 
         cx, cy = self.env.house.to_coor(50, 50)
         if reset == True:
             self.env.reset(x=cx, y=cy)
@@ -100,6 +116,7 @@ class House3DUtils():
             pos = pos + self.env.cam.front * self.move_sensitivity
 
             x2, y2 = self.env.house.to_grid(pos.x, pos.z)
+            #  Saty: Computing unit vector
 
             mult = np.array([x2, y2]) - np.array([x1, y1])
             mult = (mult[0], mult[1])
@@ -128,22 +145,25 @@ class House3DUtils():
         done = False
 
         if action == 0:
-            mv = self.env.move_forward(
-                dist_fwd=self.move_sensitivity, dist_hor=0)
+            mv = self.env.move_forward(dist_fwd=self.move_sensitivity, dist_hor=0)
             obs = self.env.render()
-            if mv == False:  # collision
+
+            if mv == False and step_reward:  # collision
                 reward -= self.collision_reward
-            elif mv != False and step_reward == True:
-                # evaluate connMap dist here
-                x2, y2 = self.env.house.to_grid(self.env.cam.pos.x,
-                                                self.env.cam.pos.z)
-                final_target_dist = self.env.house.connMap[x2, y2]
-                reward += self.dist_reward_scale * ((init_target_dist - final_target_dist) / np.abs(
-                    self.dirs[self.angles.index(self.env.cam.yaw % 180)]).sum())
+            # Saty: Changing this so that every action get a distance reward
+            # Why is there a reward only for moving forward? 
+            
+            # elif mv != False and step_reward == True:
+            #     # evaluate connMap dist here
+            #     x2, y2 = self.env.house.to_grid(self.env.cam.pos.x,
+            #                                     self.env.cam.pos.z)
+            #     final_target_dist = self.env.house.connMap[x2, y2]
+            #     reward += self.dist_reward_scale * ((init_target_dist - final_target_dist) / np.abs(
+            #         self.dirs[self.angles.index(self.env.cam.yaw % 180)]).sum()) # <- Saty: Sweet!
 
         elif action == 1:
             self.env.rotate(-self.rotation_sensitivity)
-            obs = self.env.render()  
+            obs = self.env.render()
 
         elif action == 2:
             self.env.rotate(self.rotation_sensitivity)
@@ -153,6 +173,23 @@ class House3DUtils():
             done = True
             obs = self.env.render()
 
+        # Saty: Distance reward
+        if step_reward==True:
+            x2, y2 = self.env.house.to_grid(self.env.cam.pos.x,
+                                                self.env.cam.pos.z)
+            final_target_dist = self.env.house.connMap[x2, y2]
+            # print("initial Target Distance:", init_target_dist)
+            # print("Final Target Distance::", final_target_dist)
+            
+            dist_reward = self.dist_reward_scale * ((init_target_dist - final_target_dist) / np.abs(
+                self.dirs[self.angles.index(self.env.cam.yaw % 180)]).sum()) # <- Saty: Sweet!
+            reward += dist_reward
+
+        # Saty: Coverage reward
+        sem = self.env.render(mode='semantic')
+        cov = self.coverage(sem, self.target_obj_name)
+        reward += cov*10
+        
         return obs, reward, done
 
     # pos: [x, y, z, yaw], or objrender.Vec3
@@ -682,13 +719,15 @@ class House3DUtils():
 
     # analogous to `setTargetRoom` in the House3D API
     def set_target_object(self, obj, room):
-        object_tp = room['id'] + '_' + obj['id'] + '_' + obj['fine_class'].lower()
-        
+        object_tp = room['id'] + '_' + obj['id'] + '_' + obj['fine_class'].lower(
+        )
+        self.target_obj_name = obj['fine_class']
+
         # Caching
         if object_tp in self.env.house.connMapDict:
-            self.env.house.connMap, self.env.house.connectedCoors, self.env.house.inroomDist, self.env.house.maxConnDist = self.env.house.connMapDict[object_tp]
+            self.env.house.connMap, self.env.house.connectedCoors, self.env.house.inroomDist, self.env.house.maxConnDist = self.env.house.connMapDict[
+                object_tp]
             return True  # object changed!
-
         elif os.path.exists(
                 os.path.join(
                     self.target_obj_conn_map_dir,
@@ -705,11 +744,9 @@ class House3DUtils():
         self.env.house.connMap = connMap = np.ones(
             (self.env.house.n_row + 1, self.env.house.n_row + 1),
             dtype=np.int32) * -1
-
         self.env.house.inroomDist = inroomDist = np.ones(
             (self.env.house.n_row + 1, self.env.house.n_row + 1),
             dtype=np.float32) * -1
-
         dirs = [[0, 1], [1, 0], [-1, 0], [0, -1]]
         que = []
         flag_find_open_components = True
@@ -733,10 +770,9 @@ class House3DUtils():
                 dirs=dirs,
                 return_open=flag_find_open_components
             )  # find all the open components
-
             if len(curr_components) == 0:
                 print('No space found! =(')
-                print('Too close to target obj') #Himi changes
+                print('Found Target') #Himi changes #Target too close
                 return True
                 #raise ValueError('no space')
             if isinstance(curr_components[0],
@@ -816,7 +852,7 @@ class House3DUtils():
                 self.env.house.house['id'] + '_' + object_tp + '.npy'),
             connMap)
         self.connectedCoors = que
-        print(' >>>> ConnMap Cached!')
+        #print(' >>>> ConnMap Cached!')
         return True  # room changed!
 
     def _load_semantic_classes(self, color_file=None):
