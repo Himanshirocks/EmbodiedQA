@@ -22,6 +22,7 @@ import pdb
 import pickle as pkl
 from collections import defaultdict
 import csv
+
 def oneHot(vec, dim):
     batch_size = vec.size(0)
     out = torch.zeros(batch_size, dim)
@@ -44,15 +45,29 @@ def load_semantic_classes(color_file):
 
     return semantic_classes
 
-
-def coverage(img, target_obj_class, color_file):
+def coverage(img, target_obj_class, semantic_classes):
     
     hei, wid, _ = img.shape
-    trgt_obj_col = color_file[target_obj_class]
+    trgt_obj_col = semantic_classes[target_obj_class]
     mask = np.all(img == trgt_obj_col, axis=2)
     cov = np.sum(mask)/(hei * wid)
     
     return cov
+
+def avgCov(cov_dict):
+    """ calculate avg coverage for the last 5 frames for all batches"""
+    total = 0
+    count = 0
+    
+    for t in list(cov_dict.keys()):
+        for num in list(cov_dict[t].keys()):
+            for i in list(cov_dict[t][num].keys()):
+                cov_epi = cov_dict[t][num][i][-6:-1]
+                total += np.sum(np.array(cov_epi))
+                count += 1
+    
+    return total/count
+
 
 ################################################################################################
 #make models trained in pytorch 4 compatible with earlier pytorch versions
@@ -69,7 +84,7 @@ except AttributeError:
 
 ################################################################################################
 
-def eval(rank, args, shared_model, best_eval_acc, epoch=0):
+def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
 
     #torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -157,60 +172,43 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
             'd_D_10', 'd_D_30', 'd_D_50', 'd_min_10', 'd_min_30',
             'd_min_50', 'r_T_10', 'r_T_30', 'r_T_50', 'r_e_10', 'r_e_30',
             'r_e_50', 'stop_10', 'stop_30', 'stop_50', 'ep_len_10',
-            'ep_len_30', 'ep_len_50', 'cov_'
+            'ep_len_30', 'ep_len_50'
         ],
         log_json=args.output_log_path)
 
     if 'cnn' in args.model_type:
 
         done = False
-
+        t =0 
         while done == False:
 
-            for batch in tqdm(eval_loader):
+            for num, batch in enumerate(tqdm(eval_loader)):
 
                 model.load_state_dict(shared_model.state_dict())
                 model.to(device)
 
                 idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
-                ##########
-                #Sai analysis
-                # pdb.set_trace()
-                if 364909 in idx:
-                    #pass
-                    question = torch.tensor([[105,  25,  53,  94,  72,  50,  94,  11,   2,   0]])
-                else:
-                    sys.exit(1)
-                ##########
+                
                 metrics_slug = {}
 
                 # evaluate at multiple initializations
                 for i in [10, 30, 50]:
 
-                    t += 1
-
                     if action_length[0] + 1 - i - 5 < 0:
                         invalids.append(idx[0])
                         continue
 
-                    ep_inds = [
-                        x for x in range(action_length[0] + 1 - i - 5,
-                                         action_length[0] + 1 - i)
-                    ]
+                    ep_inds = [x for x in range(action_length[0] + 1 - i - 5,action_length[0] + 1 - i)]
 
-                    sub_img_feats = torch.index_select(
-                        img_feats, 1, torch.LongTensor(ep_inds))
+                    sub_img_feats = torch.index_select(img_feats, 1, torch.LongTensor(ep_inds))
 
-                    init_pos = eval_loader.dataset.episode_pos_queue[
-                        ep_inds[-1]]
+                    init_pos = eval_loader.dataset.episode_pos_queue[ep_inds[-1]]
 
                     h3d = eval_loader.dataset.episode_house
 
-                    h3d.env.reset(
-                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
-                    init_dist_to_target = h3d.get_dist_to_target(
-                        h3d.env.cam.pos)
+                    init_dist_to_target = h3d.get_dist_to_target(h3d.env.cam.pos)
                     if init_dist_to_target < 0:  # unreachable
                         invalids.append(idx[0])
                         continue
@@ -225,9 +223,8 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                     episode_length = 0
                     episode_done = True
 
-                    dists_to_target, pos_queue, actions = [
-                        init_dist_to_target
-                    ], [init_pos], []
+                    dists_to_target, pos_queue, actions = [init_dist_to_target], [init_pos], []
+                    cov_batch_i = []
 
                     for step in range(args.max_episode_length):
 
@@ -249,23 +246,31 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
                         episode_done = episode_done or episode_length >= args.max_episode_length
 
-                        img = torch.from_numpy(img.transpose(
-                            2, 0, 1)).float() / 255.0
+                        img = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
+                        
                         img_feat_var = eval_loader.dataset.cnn(
-                            Variable(img.view(1, 3, 224, 224)
-                                     .to(device))).view(1, 1, 3200)
-                        sub_img_feats_var = torch.cat(
-                            [sub_img_feats_var, img_feat_var], dim=1)
+                            Variable(img.view(1, 3, 224, 224).to(device))).view(1, 1, 3200)
+                        
+                        sub_img_feats_var = torch.cat([sub_img_feats_var, img_feat_var], dim=1)
                         sub_img_feats_var = sub_img_feats_var[:, -5:, :]
 
-                        dists_to_target.append(
-                            h3d.get_dist_to_target(h3d.env.cam.pos))
+                        dists_to_target.append(h3d.get_dist_to_target(h3d.env.cam.pos))
+                        
                         pos_queue.append([
                             h3d.env.cam.pos.x, h3d.env.cam.pos.y,
                             h3d.env.cam.pos.z, h3d.env.cam.yaw
                         ])
+                        target_obj = eval_loader.dataset.target_obj['fine_class']
+                        img_semantic = h3d.env.render(mode='semantic')
+                        cov = coverage(img_semantic, target_obj, semantic_classes)
+                        cov_batch_i.append(cov)
+                        
 
-                        if episode_done == True:
+                        if episode_done:
+                            cov_batch_i.append(target_obj)
+                            if num not in coverage_log[t].keys():
+                                coverage_log[t][num] = {}
+                            coverage_log[t][num].update({i:cov_batch_i})    
                             break
 
                     # compute stats
@@ -313,13 +318,14 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
            # del h3d
             eval_loader.dataset._load_envs()
+            t += 1
             if len(eval_loader.dataset.pruned_env_set) == 0:
                 done = True
 
     elif 'lstm' in args.model_type:
 
         done = False
-
+        t=0
         while done == False:
 
             if args.overfit:
@@ -335,19 +341,18 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                     ],
                     log_json=args.output_log_path)
 
-            for batch in tqdm(eval_loader):
+            for num, batch in enumerate(tqdm(eval_loader)):
 
                 model.load_state_dict(shared_model.state_dict())
                 model.to(device)
 
                 idx, questions, answer, _, actions_in, actions_out, action_lengths, _ = batch
+
                 question_var = Variable(questions.to(device))
                 metrics_slug = {}
 
                 # evaluate at multiple initializations
                 for i in [10, 30, 50]:
-
-                    t += 1
 
                     if action_lengths[0] - 1 - i < 0:
                         invalids.append([idx[0], i])
@@ -356,21 +361,18 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                     h3d = eval_loader.dataset.episode_house
 
                     # forward through lstm till spawn
-                    if len(eval_loader.dataset.episode_pos_queue[:-i]
-                           ) > 0:
+                    if len(eval_loader.dataset.episode_pos_queue[:-i]) > 0:
                         images = eval_loader.dataset.get_frames(
                             h3d,
                             eval_loader.dataset.episode_pos_queue[:-i],
                             preprocess=True)
+
                         raw_img_feats = eval_loader.dataset.cnn(
                             Variable(torch.FloatTensor(images).to(device)))
 
-                        actions_in_pruned = actions_in[:, :
-                                                       action_lengths[0] -
-                                                       i]
+                        actions_in_pruned = actions_in[:, :action_lengths[0] -i]
                         actions_in_var = Variable(actions_in_pruned.to(device))
-                        action_lengths_pruned = action_lengths.clone(
-                        ).fill_(action_lengths[0] - i)
+                        action_lengths_pruned = action_lengths.clone().fill_(action_lengths[0] - i)
                         img_feats_var = raw_img_feats.view(1, -1, 3200)
 
                         if '+q' in args.model_type:
@@ -383,23 +385,19 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                                 img_feats_var, False, actions_in_var,
                                 action_lengths_pruned.cpu().numpy())
                         try:
-                            init_pos = eval_loader.dataset.episode_pos_queue[
-                                -i]
+                            init_pos = eval_loader.dataset.episode_pos_queue[-i]
                         except:
                             invalids.append([idx[0], i])
                             continue
 
                         action_in = torch.LongTensor(1, 1).fill_(
-                            actions_in[0,
-                                       action_lengths[0] - i]).to(device)
+                            actions_in[0,action_lengths[0] - i]).to(device)
                     else:
-                        init_pos = eval_loader.dataset.episode_pos_queue[
-                            -i]
+                        init_pos = eval_loader.dataset.episode_pos_queue[-i]
                         hidden = model.nav_rnn.init_hidden(1)
                         action_in = torch.LongTensor(1, 1).fill_(0).to(device)
 
-                    h3d.env.reset(
-                        x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
+                    h3d.env.reset(x=init_pos[0], y=init_pos[2], yaw=init_pos[3])
 
                     init_dist_to_target = h3d.get_dist_to_target(
                         h3d.env.cam.pos)
@@ -410,18 +408,17 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                     img = h3d.env.render()
                     img = torch.from_numpy(img.transpose(
                         2, 0, 1)).float() / 255.0
+
                     img_feat_var = eval_loader.dataset.cnn(
-                        Variable(img.view(1, 3, 224, 224).to(device))).view(
-                            1, 1, 3200)
+                        Variable(img.view(1, 3, 224, 224).to(device))).view(1, 1, 3200)
 
                     episode_length = 0
                     episode_done = True
 
-                    dists_to_target, pos_queue, actions = [
-                        init_dist_to_target
-                    ], [init_pos], []
+                    dists_to_target, pos_queue, actions = [init_dist_to_target], [init_pos], []
                     actual_pos_queue = [(h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw)]
-
+                    
+                    cov_batch_i = []
                     for step in range(args.max_episode_length):
 
                         episode_length += 1
@@ -453,40 +450,51 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
                         episode_done = episode_done or episode_length >= args.max_episode_length
 
-                        img = torch.from_numpy(img.transpose(
-                            2, 0, 1)).float() / 255.0
+                        img = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
+                        
                         img_feat_var = eval_loader.dataset.cnn(
                             Variable(img.view(1, 3, 224, 224)
                                      .to(device))).view(1, 1, 3200)
 
-                        action_in = torch.LongTensor(
-                            1, 1).fill_(action + 1).to(device)
+                        action_in = torch.LongTensor(1, 1).fill_(action + 1).to(device)
 
-                        dists_to_target.append(
-                            h3d.get_dist_to_target(h3d.env.cam.pos))
+                        dists_to_target.append(h3d.get_dist_to_target(h3d.env.cam.pos))
+                        
                         pos_queue.append([
                             h3d.env.cam.pos.x, h3d.env.cam.pos.y,
                             h3d.env.cam.pos.z, h3d.env.cam.yaw
                         ])
 
-                        if episode_done == True:
+                        # Saty: semantic maps here
+                        target_obj = eval_loader.dataset.target_obj['fine_class']
+                        img_semantic = h3d.env.render(mode='semantic')
+                        cov = coverage(img_semantic, target_obj, semantic_classes)
+                        cov_batch_i.append(cov)
+                        
+                        if episode_done:
+                            cov_batch_i.append(target_obj)
+                            if num not in coverage_log[t].keys():
+                                coverage_log[t][num] = {}
+                            coverage_log[t][num].update({i:cov_batch_i})    
                             break
 
-                        actual_pos_queue.append([
-                            h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw])
+                        # if episode_done == True:
+                        #     break
+
+                        actual_pos_queue.append([h3d.env.cam.pos.x, h3d.env.cam.pos.z, h3d.env.cam.yaw])
 
                     # compute stats
                     metrics_slug['d_0_' + str(i)] = dists_to_target[0]
                     metrics_slug['d_T_' + str(i)] = dists_to_target[-1]
-                    metrics_slug['d_D_' + str(
-                        i)] = dists_to_target[0] - dists_to_target[-1]
-                    metrics_slug['d_min_' + str(i)] = np.array(
-                        dists_to_target).min()
+                    metrics_slug['d_D_' + str(i)] = dists_to_target[0] - dists_to_target[-1]
+                    metrics_slug['d_min_' + str(i)] = np.array(dists_to_target).min()
                     metrics_slug['ep_len_' + str(i)] = episode_length
+                    
                     if action == 3:
                         metrics_slug['stop_' + str(i)] = 1
                     else:
                         metrics_slug['stop_' + str(i)] = 0
+                    
                     inside_room = []
                     for p in pos_queue:
                         inside_room.append(
@@ -513,6 +521,7 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                 # update metrics
                 metrics.update(metrics_list)
 
+            
             print(metrics.get_stat_string(mode=0))
             print('invalids', len(invalids))
             logging.info("EVAL: init_steps: {} metrics: {}".format(i, metrics.get_stat_string(mode=0)))
@@ -520,9 +529,11 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
             # del h3d
             eval_loader.dataset._load_envs()
+            t +=1 
+
             print("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
             logging.info("eval_loader pruned_env_set len: {}".format(len(eval_loader.dataset.pruned_env_set)))
-            assert len(eval_loader.dataset.pruned_env_set) > 0
+            # assert len(eval_loader.dataset.pruned_env_set) > 0
             if len(eval_loader.dataset.pruned_env_set) == 0:
                 done = True
 
@@ -553,22 +564,14 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                 idx, question, answer, actions, action_length = batch
                 metrics_slug = {}
 
-                #print('Question is ', question)
-                #print('answer is ', answer)
-
                 answeris = answer.item()
 
                 h3d = eval_loader.dataset.episode_house
-                # print("Target Room Is: ")
-                # print(eval_loader.dataset.target_room)
-                # print("Target Object Is: ")
-                # print(eval_loader.dataset.target_obj)
 
                 # evaluate at multiple initializations
                 video_dir = '../video/nav'
                 video_dir = os.path.join(video_dir,
                                                    args.time_id + '_' + args.identifier)
-                cov_batch_i = []
                 for i in [10, 30, 50]:
                     #Satyen suggests Himi changes ----> works
                     fourcc = cv2.VideoWriter_fourcc(*'XVID')
@@ -614,6 +617,7 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
 
                     init_dist_to_target = h3d.get_dist_to_target(
                         h3d.env.cam.pos)
+
                     if init_dist_to_target < 0:  # unreachable
                         invalids.append([idx[0], i])
                         continue
@@ -632,6 +636,8 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                     first_step_is_controller = controller_step
                     planner_step = True
                     action = int(controller_action_in)
+                    
+                    cov_batch_i = []
 
                     for step in range(args.max_episode_length):
                         if not first_step:
@@ -696,12 +702,12 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                         episode_length += 1
                         dists_to_target.append(
                             h3d.get_dist_to_target(h3d.env.cam.pos))
+
                         pos_queue.append([
                             h3d.env.cam.pos.x, h3d.env.cam.pos.y,
                             h3d.env.cam.pos.z, h3d.env.cam.yaw
                         ])
                         
-
                         # Saty: semantic maps here
                         target_obj = eval_loader.dataset.target_obj['fine_class']
                         img_semantic = h3d.env.render(mode='semantic')
@@ -722,8 +728,6 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
                             # cv2.waitKey(100)
                             video.write(img)
                         first_step = False
-
-                        
 
                     if args.render:
                         video.release()
@@ -783,42 +787,48 @@ def eval(rank, args, shared_model, best_eval_acc, epoch=0):
             if len(eval_loader.dataset.pruned_env_set) == 0:
                 done = True
 
-        # checkpoint if best val loss
-        if metrics.metrics[8][0] > best_eval_acc:  # d_D_50
+    # checkpoint if best val loss in terms of coverage
+    cov_avg = avgCov(coverage_log)
+
+    if metrics.metrics[8][0] > best_eval_acc or cov_avg > best_cov:  # d_D_50
+        if metrics.metrics[8][0] > best_eval_acc:
             best_eval_acc = metrics.metrics[8][0]
-            if args.to_log == 1:
-                metrics.dump_log()
+        if cov_avg > best_cov:
+            best_cov = cov_avg
+             
+        if args.to_log == 1:
+            metrics.dump_log()
+            log_file = os.path.join(args.checkpoint_dir, 'coverage_log_{}_{:.4f}.pkl'.format(epoch, cov_avg))
+            with open(log_file, "wb") as file_:
+                pkl.dump(coverage_log, file_)
 
-                model_state = get_state(model)
+            model_state = get_state(model)
 
-                aad = dict(args.__dict__)
-                ad = {}
-                for i in aad:
-                    if i[0] != '_':
-                        ad[i] = aad[i]
+            aad = dict(args.__dict__)
+            ad = {}
+            for i in aad:
+                if i[0] != '_':
+                    ad[i] = aad[i]
 
-                checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
+            checkpoint = {'args': ad, 'state': model_state, 'epoch': epoch}
 
-                checkpoint_path = '%s/epoch_%d_d_D_50_%.04f.pt' % (
-                    args.checkpoint_dir, epoch, best_eval_acc)
-                
-                print('Saving checkpoint to %s' % checkpoint_path)
-                logging.info("EVAL: Saving checkpoint to {}".format(checkpoint_path))
-                torch.save(checkpoint, checkpoint_path)
+            checkpoint_path = '%s/epoch_%d_d_D_50_acc-%.04f_cov-%.04f.pt' % (
+                args.checkpoint_dir, epoch, best_eval_acc, cov_avg)
+            
+            print('Saving checkpoint to %s' % checkpoint_path)
+            logging.info("EVAL: Saving checkpoint to {}".format(checkpoint_path))
+            torch.save(checkpoint, checkpoint_path)
 
-        print('[best_eval_d_D_50:%.04f]' % best_eval_acc)
-        logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
+    print('[best_eval_d_D_50:%.04f; best Coverage:%.04f]' % (best_eval_acc, best_cov))
+    logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
 
-        # Dump coverageLog as pkl file
-        # eval_loader.dataset._load_envs(start_idx=0, in_order=True)
-        log_file = os.path.join(args.checkpoint_dir, 'coverage_log_{}.pkl'.format(epoch))
-        with open(log_file, "wb") as file_:
-            pkl.dump(coverage_log, file_)
-
-    return best_eval_acc
+    # eval_loader.dataset._load_envs(start_idx=0, in_order=True)
+    # Dump coverageLog as pkl file
+    
+    return best_eval_acc, best_cov
 
 def train(rank, args, shared_model, resume_epoch = 0):
-    torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
+    # torch.cuda.set_device(args.gpus.index(args.gpus[rank % len(args.gpus)]))
 
     if args.model_type == 'cnn':
 
@@ -911,7 +921,10 @@ def train(rank, args, shared_model, resume_epoch = 0):
     logging.info('TRAIN: train loader has {} samples'.format(len(train_loader.dataset)))
 
     t, epoch = 0, resume_epoch
+    # In case you need to load a model
     best_eval_acc = 0 if args.best_eval_acc==0 else args.best_eval_acc
+    best_cov = 0 if args.best_cov == 0 else args.best_cov
+
     while epoch < int(args.max_epochs):
         if 'cnn' in args.model_type:
 
@@ -929,24 +942,28 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     model.cuda()
 
                     idx, questions, _, img_feats, _, actions_out, _ = batch
-
+                    
                     img_feats_var = Variable(img_feats.cuda())
                     if '+q' in args.model_type:
                         questions_var = Variable(questions.cuda())
-                    actions_out_var = Variable(actions_out.cuda())
+                    actions_out = actions_out.cuda()
 
                     if '+q' in args.model_type:
                         scores = model(img_feats_var, questions_var)
                     else:
                         scores = model(img_feats_var)
 
-                    loss = lossFn(scores, actions_out_var)
+                    # print("Actions Out #####", actions_out, "length re", actions_out.size())
+                    # print("Image Features from batch:", img_feats.size())
+                    # print("scores,", scores.size())
+                    loss = lossFn(scores, actions_out.long())
 
                     # zero grad
                     optim.zero_grad()
 
                     # update metrics
-                    metrics.update([loss.data[0]])
+                    # metrics.update([loss.data[0]])
+                    # logging.info("TRAIN CNN loss: {:.6f}".format(loss.data[0]))
 
                     # backprop and update
                     loss.backward()
@@ -954,11 +971,11 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     ensure_shared_grads(model.cpu(), shared_model)
                     optim.step()
 
-                    if t % args.print_every == 0:
-                        print(metrics.get_stat_string())
-                        logging.info("TRAIN: metrics: {}".format(metrics.get_stat_string()))
-                        if args.to_log == 1:
-                            metrics.dump_log()
+                    # if t % args.print_every == 0:
+                    #     print(metrics.get_stat_string())
+                    #     logging.info("TRAIN: metrics: {}".format(metrics.get_stat_string()))
+                    #     if args.to_log == 1:
+                    #         metrics.dump_log()
 
                     print('[CHECK][Cache:%d][Total:%d]' %
                           (len(train_loader.dataset.img_data_cache),
@@ -980,7 +997,7 @@ def train(rank, args, shared_model, resume_epoch = 0):
 
             lossFn = MaskedNLLCriterion().cuda()
 
-            done = False
+            done = False 
             all_envs_loaded = train_loader.dataset._check_if_all_envs_loaded()
             total_times = []
             while done == False:
@@ -996,8 +1013,12 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     model.cuda()
 
                     idx, questions, _, img_feats, actions_in, actions_out, action_lengths, masks = batch
-
+                    # print("Actions in############", actions_in)
+                    # print("Actions_out############", actions_out)
+                    
+                    ################## Covert to CUDA ############################
                     img_feats_var = Variable(img_feats.cuda())
+                    
                     if '+q' in args.model_type:
                         questions_var = Variable(questions.cuda())
                     actions_in_var = Variable(actions_in.cuda())
@@ -1005,26 +1026,30 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     action_lengths = action_lengths.cuda()
                     masks_var = Variable(masks.cuda())
 
+                    ############# Permute indices ###################################
                     action_lengths, perm_idx = action_lengths.sort(
                         0, descending=True)
 
                     img_feats_var = img_feats_var[perm_idx]
-                    if '+q' in args.model_type:
-                        questions_var = questions_var[perm_idx]
-                    actions_in_var = actions_in_var[perm_idx]
                     actions_out_var = actions_out_var[perm_idx]
                     masks_var = masks_var[perm_idx]
+                    actions_in_var = actions_in_var[perm_idx]
+                    if '+q' in args.model_type:
+                        questions_var = questions_var[perm_idx]
+                    ######################################################
 
                     if '+q' in args.model_type:
-                        scores, hidden = model(img_feats_var, questions_var,
+                        scores, hidden = model(img_feats_var, 
+                                               questions_var,
                                                actions_in_var,
                                                action_lengths.cpu().numpy())
                     else:
-                        scores, hidden = model(img_feats_var, False,
+                        scores, hidden = model(img_feats_var, 
+                                               False,
                                                actions_in_var,
                                                action_lengths.cpu().numpy())
 
-                    #block out masks
+                    #block out masks - default is 0
                     if args.curriculum:
                         curriculum_length = (epoch+1)*5
                         for i, action_length in enumerate(action_lengths):
@@ -1035,15 +1060,14 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     loss = lossFn(
                         logprob, actions_out_var[:, :action_lengths.max()]
                         .contiguous().view(-1, 1),
-                        masks_var[:, :action_lengths.max()].contiguous().view(
-                            -1, 1))
+                        masks_var[:, :action_lengths.max()].contiguous().view(-1, 1))
 
                     # zero grad
                     optim.zero_grad()
 
                     # update metrics
                     metrics.update([loss.data[0]])
-                    logging.info("TRAIN LSTM loss: {:.6f}".format(loss.data[0]))
+                    logging.info("TRAIN loss: {:.6f}".format(loss.data[0]))
 
                     # backprop and update
                     loss.backward()
@@ -1166,7 +1190,7 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     metrics.update(
                         [planner_loss.data[0], controller_loss.data[0]])
                     logging.info("TRAINING PACMAN planner-loss: {:.6f} controller-loss: {:.6f}".format(
-                        planner_loss.data[0], controller_loss.data[0]))
+                        planner_loss.data[0], controller_loss.data[0] ))
 
                     # backprop and update
                     if args.max_controller_actions == 1:
@@ -1200,8 +1224,9 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     done = True
 
         epoch += 1
+
         if epoch % args.eval_every ==0:
-            best_eval_acc = eval(rank,args,shared_model,  best_eval_acc, epoch)
+            best_eval_acc, best_cov = eval(rank,args,shared_model, best_eval_acc,best_cov, epoch)
 
         if epoch % args.save_every == 0:
 
@@ -1236,7 +1261,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='data/500')
+        default='/home/ubuntu/space/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(
@@ -1261,7 +1286,7 @@ if __name__ == '__main__':
     parser.add_argument('-overfit', default=False, action='store_true')
     parser.add_argument('-render', default=False, action='store_true')
     # bookkeeping
-    parser.add_argument('-print_every', default=5, type=int)
+    parser.add_argument('-print_every', default=1, type=int)
     parser.add_argument('-eval_every', default=1, type=int)
     parser.add_argument('-save_every', default=5, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
     parser.add_argument('-identifier', default='pacman')
@@ -1277,6 +1302,8 @@ if __name__ == '__main__':
     parser.add_argument('-max_controller_actions', type=int, default=5)
     parser.add_argument('-max_actions', type=int)
     parser.add_argument('-best_eval_acc', type=float, default=0)
+    parser.add_argument('-best_cov', type=float, default=0)
+    
     args = parser.parse_args()
 
     args.time_id = time.strftime("%m_%d_%H:%M")
@@ -1294,15 +1321,15 @@ if __name__ == '__main__':
                         level=logging.INFO,
                         format='%(asctime)-15s %(message)s')
 
-    #try:
-    #    args.gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-    #    args.gpus = [int(x) for x in args.gpus]
-    #except KeyError:
-    #    print("CPU not supported")
-    #    logging.info("CPU not supported")
-    #    exit()
+    try:
+       args.gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+       args.gpus = [int(x) for x in args.gpus]
+    except KeyError:
+       print("CPU not supported")
+       logging.info("CPU not supported")
+       exit()
 
-    args.gpus = [0]
+    # args.gpus = [0]
 
     if args.checkpoint_path != False:
 
@@ -1382,7 +1409,7 @@ if __name__ == '__main__':
         resume_epoch = checkpoint['epoch']
     if args.mode == 'eval':
 
-        eval(0, args, shared_model, 20)
+        eval(args.gpus[0], args, shared_model, 20)
 
     elif args.mode == 'train':
 
@@ -1390,7 +1417,7 @@ if __name__ == '__main__':
             processes = []
             for rank in range(0, args.num_processes):
                 # for rank in range(0, args.num_processes):
-                p = mp.Process(target=train, args=(rank, args, shared_model))
+                p = mp.Process(target=train, args=(args.gpus[rank], args, shared_model))
                 p.start()
                 processes.append(p)
     
@@ -1398,7 +1425,7 @@ if __name__ == '__main__':
                 p.join()
  
         else:
-            train(0, args, shared_model, resume_epoch = resume_epoch)
+            train(args.gpus[0], args, shared_model, resume_epoch = resume_epoch)
 
     else:
         processes = []
