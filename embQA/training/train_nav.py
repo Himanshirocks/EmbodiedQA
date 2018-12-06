@@ -187,7 +187,7 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
                 model.load_state_dict(shared_model.state_dict())
                 model.to(device)
 
-                idx, questions, _, img_feats, actions_in, actions_out, action_length = batch
+                idx, questions, _, img_feats, actions_in, actions_out, actions_out_prev, pos_queue_curr, action_length = batch
                 
                 metrics_slug = {}
 
@@ -198,7 +198,7 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
                         invalids.append(idx[0])
                         continue
 
-                    ep_inds = [x for x in range(action_length[0] + 1 - i - 5,action_length[0] + 1 - i)]
+                    ep_inds = [x for x in range(action_length[0] + 1 - i - 5, action_length[0] + 1 - i)]
 
                     sub_img_feats = torch.index_select(img_feats, 1, torch.LongTensor(ep_inds))
 
@@ -216,10 +216,14 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
                     sub_img_feats_var = Variable(sub_img_feats.to(device))
                     if '+q' in args.model_type:
                         questions_var = Variable(questions.to(device))
+                    actions_out = actions_out.cuda()
+                    actions_out_prev = actions_out_prev.cuda()
+                    pos_queue_curr = Variable(pos_queue_curr.cuda())
+                    actions_out_prev_OH = Variable(oneHot(actions_out_prev, 3).cuda())
+
 
                     # sample actions till max steps or <stop>
                     # max no. of actions = 100
-
                     episode_length = 0
                     episode_done = True
 
@@ -599,17 +603,16 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
                         actions[0, :action_length[0] + 1].numpy(), i, args.max_controller_actions 
                     )
 
-                    planner_actions_in_OH = Variable(oneHot(planner_actions_in, 4).to(device))
-                    # planner_actions_in_var = Variable(planner_actions_in.to(device))
+                    #planner_actions_in_OH = Variable(oneHot(planner_actions_in, 4).to(device))
+                    planner_actions_in_var = Variable(planner_actions_in.to(device))
                     planner_img_feats_var = Variable(planner_img_feats.to(device))
                 
                     # forward planner till spawn to update hidden state
                     for step in range(planner_actions_in.size(0)):
 
                         planner_scores, planner_hidden = model.planner_step(
-                            question_var, planner_img_feats_var[step]
-                            .unsqueeze(0).unsqueeze(0),
-                            planner_actions_in_OH[step].view(-1 ,1, 4),
+                            question_var, planner_img_feats_var[step].view(1,1,3200),
+                            planner_actions_in_var[step].view(1,1),
                             planner_hidden
                         )
 
@@ -652,18 +655,17 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
 
                         if not first_step or first_step_is_controller:
                             # query controller to continue or not
-                            # controller_action_in = Variable(
-                            #     torch.LongTensor(1, 1).fill_(action).to(device))
+                            controller_action_in = Variable(torch.LongTensor(1, 1).fill_(action).to(device))
                             
-                            # Sati: Conver to oneHot here
-                            controller_action_var = Variable(torch.zeros(3).to(device))
-                            controller_action_var[controller_action_in] = 1
+                            # Satty: Conver to oneHot here
+                            # controller_action_var = Variable(torch.zeros(3).to(device))
+                            #controller_action_var[controller_action_in] = 1
                             # controller_action_in = Variable(oneHot(controller_action_, 3).to(device))
                             # print("Controller_actions_in", controller_action_var, controller_action_var.size())
-                            
+
                             controller_scores = model.controller_step(
                                 img_feat_var, 
-                                controller_action_var,
+                                controller_action_in,
                                 planner_hidden[0])
                             
                             prob = F.softmax(controller_scores, dim=1)
@@ -682,9 +684,9 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
 
                         if planner_step:
                             if not first_step:
-                                action_in = Variable(torch.zeros(1, 1, 4).to(device))
-                                action_in[0, 0, action + 1] = 1
-                                # action_in = torch.LongTensor(1, 1).fill_(action + 1).to(device)
+                                #action_in = Variable(torch.zeros(1, 1, 4).to(device))
+                                #action_in[0, 0, action + 1] = 1
+                                action_in = torch.LongTensor(1, 1).fill_(action + 1).to(device)
                                 # print("Action In:", action_in)
                                 
                                 planner_scores, planner_hidden = model.planner_step(
@@ -795,7 +797,7 @@ def eval(rank, args, shared_model, best_eval_acc, best_cov, epoch=0):
             best_eval_acc = metrics.metrics[8][0]
         if cov_avg > best_cov:
             best_cov = cov_avg
-             
+
         if args.to_log == 1:
             metrics.dump_log()
             log_file = os.path.join(args.checkpoint_dir, 'coverage_log_{}_{:.4f}.pkl'.format(epoch, cov_avg))
@@ -941,21 +943,26 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     model.train()
                     model.cuda()
 
-                    idx, questions, _, img_feats, _, actions_out, _ = batch
+                    idx, questions, _, img_feats, _, actions_out, actions_out_prev, pos_queue_curr, _ = batch
                     
                     img_feats_var = Variable(img_feats.cuda())
                     if '+q' in args.model_type:
                         questions_var = Variable(questions.cuda())
                     actions_out = actions_out.cuda()
+                    actions_out_prev = actions_out_prev
+                    pos_queue_curr = Variable(pos_queue_curr.cuda())
 
+                    # Conver to OH here!
+                    actions_out_prev_OH = Variable(oneHot(actions_out_prev, 3).cuda())
                     if '+q' in args.model_type:
-                        scores = model(img_feats_var, questions_var)
+                        scores = model(img_feats_var, actions_out_prev_OH, pos_queue_curr, questions=questions_var)
                     else:
                         scores = model(img_feats_var)
 
                     # print("Actions Out #####", actions_out, "length re", actions_out.size())
                     # print("Image Features from batch:", img_feats.size())
                     # print("scores,", scores.size())
+                    # import pdb;pdb.set_trace()
                     loss = lossFn(scores, actions_out.long())
 
                     # zero grad
@@ -966,8 +973,10 @@ def train(rank, args, shared_model, resume_epoch = 0):
                     # logging.info("TRAIN CNN loss: {:.6f}".format(loss.data[0]))
 
                     # backprop and update
-                    loss.backward()
-
+                    try:
+                        loss.backward()
+                    except:
+                        import pdb;pdb.set_trace()
                     ensure_shared_grads(model.cpu(), shared_model)
                     optim.step()
 
@@ -1409,7 +1418,7 @@ if __name__ == '__main__':
         resume_epoch = checkpoint['epoch']
     if args.mode == 'eval':
 
-        eval(args.gpus[0], args, shared_model, 20)
+        eval(args.gpus[0], args, shared_model, 0, 0)
 
     elif args.mode == 'train':
 

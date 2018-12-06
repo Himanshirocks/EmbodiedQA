@@ -15,11 +15,11 @@ from torch.autograd import Variable
 torch.backends.cudnn.enabled = False
 import torch.multiprocessing as mp
 
-from models import VqaLstmModel, VqaLstmCnnAttentionModel
+from models_att_proper import VqaLstmModel, VqaLstmCnnAttentionModel
 from data import EqaDataset, EqaDataLoader
 from metrics import VqaMetric
 
-from models import get_state, repackage_hidden, ensure_shared_grads
+from models_vqa import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab
 
 import pdb
@@ -111,17 +111,18 @@ def eval(rank, args, shared_model, best_eval_acc=0,  checkpoint=None, epoch = 0)
                 model.cuda()
 
                 idx, questions, answers, images, _, _, _ = batch
+                ques_string = [[eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question if x != 0] for question in questions]
                 questions_var = Variable(questions.cuda())
                 answers_var = Variable(answers.cuda())
                 images_var = Variable(images.cuda())
                 images_numpy = images_var.data.cpu().numpy()
                 question_numpy = questions_var.data.cpu().numpy()
                 answers_numpy = answers_var.data.cpu().numpy()
-                scores, att_probs = model(images_var, questions_var)
+                scores, att_probs = model(images_var, questions_var, ques_string)
                 scores_numpy = scores.data.cpu().numpy()
                 att_probs_numpy = att_probs.data.cpu().numpy()
                 loss = lossFn(scores, answers_var)
-                pdb.set_trace()
+                #pdb.set_trace()
                 # update metrics
                 accuracy, ranks = metrics.compute_ranks(
                     scores.data.cpu(), answers)
@@ -302,10 +303,11 @@ def train(rank, args, shared_model):
 
                     idx, questions, answers, images, _, _, _ = batch
                     questions_var = Variable(questions.cuda())
+                    ques_string = [[eval_loader.dataset.vocab['questionIdxToToken'][x.item()] for x in question if x != 0] for question in questions]
                     answers_var = Variable(answers.cuda())
                     images_var = Variable(images.cuda())
 
-                    scores, att_probs = model(images_var, questions_var)
+                    scores, att_probs = model(images_var, questions_var, ques_string)
                     loss = lossFn(scores, answers_var)
 
                     #zero grad
@@ -321,7 +323,7 @@ def train(rank, args, shared_model):
                     ensure_shared_grads(model.cpu(), shared_model)
                     optim.step()
 
-                    if t % args.print_every == 0:
+                    if num % args.print_every == 0:
                         print(metrics.get_stat_string())
                         if args.to_log == 1:
                             metrics.dump_log()
@@ -346,11 +348,11 @@ def train(rank, args, shared_model):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # data params
-    parser.add_argument('-train_h5', default='data/pruned_train.h5')
-    parser.add_argument('-val_h5', default='data/pruned_val.h5')
-    parser.add_argument('-test_h5', default='data/pruned_test.h5')
-    parser.add_argument('-data_json', default='data/pruned_data.json')
-    parser.add_argument('-vocab_json', default='data/pruned_vocab.json')
+    parser.add_argument('-train_h5', default='data/train.h5')
+    parser.add_argument('-val_h5', default='data/val.h5')
+    parser.add_argument('-test_h5', default='data/test.h5')
+    parser.add_argument('-data_json', default='data/data.json')
+    parser.add_argument('-vocab_json', default='data/new_vocab.json')
 
     parser.add_argument('-train_cache_path', default=False)
     parser.add_argument('-val_cache_path', default=False)

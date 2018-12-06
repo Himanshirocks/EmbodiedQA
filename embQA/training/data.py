@@ -285,11 +285,7 @@ class EqaDataset(Dataset):
 
                 self.planner_hidden_idx[i][:len(ca)] = torch.Tensor(ph_idx)
 
-    def _pick_envs_to_load(self,
-                           split='train',
-                           max_envs=10,
-                           start_idx=0,
-                           in_order=False):
+    def _pick_envs_to_load(self,split='train',max_envs=10,start_idx=0,in_order=False):
         if split in ['val', 'test'] or in_order == True:
             pruned_env_set = self.env_set[start_idx:start_idx + max_envs]
         else:
@@ -303,6 +299,7 @@ class EqaDataset(Dataset):
         return pruned_env_set
 
     def _load_envs(self, start_idx=-1, in_order=False):
+        
         self._clear_api_threads()
         self._clear_memory()
         if start_idx == -1:
@@ -310,10 +307,10 @@ class EqaDataset(Dataset):
 
         # Pick envs
         self.pruned_env_set = self._pick_envs_to_load(
-            split=self.split,
-            max_envs=self.max_threads_per_gpu,
-            start_idx=start_idx,
-            in_order=in_order)
+            split = self.split,
+            max_envs = self.max_threads_per_gpu,
+            start_idx = start_idx,
+            in_order = in_order)
 
         if len(self.pruned_env_set) == 0:
             return
@@ -324,7 +321,10 @@ class EqaDataset(Dataset):
         if len(self.api_threads) == 0:
             for i in range(self.max_threads_per_gpu):
                 api_temp = None
-                api_temp = objrender.RenderAPIThread(w=224, h=224, device=self.gpu_id) 
+                if 'ques' not in self.input_type:
+                    api_temp = objrender.RenderAPIThread(w=224, h=224, device=self.gpu_id) 
+                else:
+                    api_temp = objrender.RenderAPI(w=224, h=224, device=self.gpu_id) 
                 self.api_threads.append(api_temp)
 
         #try:
@@ -341,6 +341,7 @@ class EqaDataset(Dataset):
         from multiprocessing import Pool
         _args = ([h, self.cfg, self.map_resolution]
                  for h in self.pruned_env_set)
+        
         with Pool(len(self.pruned_env_set)) as pool:
             self.all_houses = pool.starmap(local_create_house, _args)
 
@@ -354,7 +355,9 @@ class EqaDataset(Dataset):
             print('[%02d/%d][split:%s][gpu:%d][house:%s]' %
                   (i + 1, len(self.all_houses), self.split, self.gpu_id,
                    self.all_houses[i].house['id']))
+            
             environment = Environment(self.api_threads[i], self.all_houses[i], self.cfg)
+            
             self.env_loaded[self.all_houses[i].house['id']] = House3DUtils(
                 environment,
                 target_obj_conn_map_dir=self.target_obj_conn_map_dir,
@@ -437,7 +440,7 @@ class EqaDataset(Dataset):
 
         return np.array(res)
 
-    # Confused about this function!
+    # Confused about this function! <- Sorta cleared
     def get_hierarchical_features_till_spawn(self, actions, backtrack_steps=0, max_controller_actions=5):
 
         action_length = len(actions)-1
@@ -542,9 +545,8 @@ class EqaDataset(Dataset):
                     self.env_loaded[self.env_list[index]],
                     pos_queue,
                     preprocess=True)
-                img_feats = self.cnn(
-                    Variable(torch.FloatTensor(images)
-                             .to(self.device))).data.cpu().numpy().copy()
+                img_feats = self.cnn(Variable(torch.FloatTensor(images).to(self.device))).data.cpu().numpy().copy()
+                
                 if self.to_cache == True:
                     self.img_data_cache[index] = img_feats
 
@@ -552,44 +554,61 @@ class EqaDataset(Dataset):
             # when target_obj_conn_map_dir is defined (reinforce),
             # load entire shortest path navigation trajectory
             # and load connectivity map for intermediate rewards
+            # Only for eqa and Validation
             if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
-                bbox_obj = [
-                    x for x in self.boxes[index]
-                    if x['type'] == 'object' and x['target'] == True
-                ][0]['box']
+                min_ = 1
+                bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]
+                trg_obj_name = bbox_obj['name']
+                bbox_obj = bbox_obj['box']
+                
+                bbox_obj_min = np.array([bbox_obj['min'][x] for x in range(3)])
+                bbox_obj_max = np.array([bbox_obj['max'][x] for x in range(3)])
+
                 for obj_id in self.env_loaded[self.env_list[index]].objects:
-                    box2 = self.env_loaded[self.env_list[index]].objects[
-                        obj_id]['bbox']
-                    if all([bbox_obj['min'][x] == box2['min'][x] for x in range(3)]) == True and \
-                        all([bbox_obj['max'][x] == box2['max'][x] for x in range(3)]) == True:
+                    box2 = self.env_loaded[self.env_list[index]].objects[obj_id]['bbox']
+                    ############################ SATYEN ######################################
+                    box2_min = np.array([box2['min'][x] for x in range(3) ])
+                    box2_max = np.array([box2['max'][x] for x in range(3) ])
+                    diff_min = np.mean(abs(bbox_obj_min - box2_min))
+                    diff_max = np.mean(abs(bbox_obj_max - box2_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
                         target_obj_id = obj_id
-                        break
-                bbox_room = [
-                    x for x in self.boxes[index]
-                    if x['type'] == 'room' and x['target'] == False
-                ][0]
-                for room in self.env_loaded[self.env_list[
-                        index]].env.house.all_rooms:
-                    if all([room['bbox']['min'][i] == bbox_room['box']['min'][i] for i in range(3)]) and \
-                        all([room['bbox']['max'][i] == bbox_room['box']['max'][i] for i in range(3)]):
+                    ############################################################################
+                
+                bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False][0]
+                min_ = 1
+                bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
+                bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
+
+                for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
+                    ################ SATYEN ###############################################
+                    room_min = np.array([room['bbox']['min'][x] for x in range(3)])
+                    room_max = np.array([room['bbox']['max'][x] for x in range(3)])
+                    diff_min = np.mean(abs(room_min - bbox_room_min))
+                    diff_max = np.mean(abs(room_max - bbox_room_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
                         target_room = room
-                        break
+                    #########################################################################
+                
                 assert target_obj_id != False
                 assert target_room != False
                 self.env_loaded[self.env_list[index]].set_target_object(
-                    self.env_loaded[self.env_list[index]].objects[
-                        target_obj_id], target_room)
+                    self.env_loaded[self.env_list[index]].objects[target_obj_id], target_room)
 
                 # [NOTE] only works for batch size = 1
                 self.episode_pos_queue = self.pos_queue[index]
                 self.episode_house = self.env_loaded[self.env_list[index]]
                 self.target_room = target_room
-                self.target_obj = self.env_loaded[self.env_list[
-                    index]].objects[target_obj_id]
+                self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
 
                 actions_in = actions[:action_length]
                 actions_out = actions[1:action_length + 1] - 2
+                # action_out_prev = actions[:action_length] - 2
 
                 return (idx, question, answer, img_feats, actions_in,
                         actions_out, action_length)
@@ -601,15 +620,27 @@ class EqaDataset(Dataset):
 
             # grab 5 random frames
             # [NOTE]: this'll break for longer-than-5 navigation sequences
-            start_idx = np.random.choice(img_feats.shape[0] + 1 -
-                                         self.num_frames)
+            # print("IMG features shape:", .shape)
+            # Don't sample the first step. Will be used as input into the navigator if the second step is sampled
+            # ACtions are: [1,4,2,2,3,2,3,,4, .... 5]
+            # 1- <Start> and 5- <stop> No need '1'!
+            # no need stop also!
+            start_idx = np.random.choice(img_feats.shape[0] - self.num_frames+1)
             img_feats = img_feats[start_idx:start_idx + self.num_frames]
 
-            actions_in = actions[start_idx:start_idx + self.num_frames]
-            actions_out = actions[start_idx + self.num_frames] - 2
+            # actions_in = actions[start_idx+1 : start_idx + self.num_frames+1] -1
+            actions_in = actions[start_idx:start_idx+self.num_frames]
+            actions_out = actions[start_idx + self.num_frames+1] - 2
 
-            return (idx, question, answer, img_feats, actions_in, actions_out,
-                    action_length)
+            
+            # actions_out_prev = actions[start_idx + self.num_frames] - 2
+            # actions_out_prev
+
+            # Pos queue at the curr_step
+            # import pdb; pdb.set_trace()
+            # pos_queue_curr = torch.Tensor(pos_queue[start_idx + self.num_frames])
+
+            return (idx, question, answer, img_feats, actions_in, actions_out, action_length)
 
         # [NAV] question+lstm
         elif self.input_type in ['lstm', 'lstm+q']:
@@ -632,14 +663,16 @@ class EqaDataset(Dataset):
                         self.env_loaded[self.env_list[index]],
                         pos_queue,
                         preprocess=True)
+                    
                     raw_img_feats = self.cnn(
                         Variable(torch.FloatTensor(images)
                                  .to(self.device))).data.cpu().numpy().copy()
+                    
                     img_feats = np.zeros(
                         (self.actions.shape[1], raw_img_feats.shape[1]),
                         dtype=np.float32)
-                    img_feats[:raw_img_feats.shape[
-                        0], :] = raw_img_feats.copy()
+
+                    img_feats[:raw_img_feats.shape[0], :] = raw_img_feats.copy()
                     if self.to_cache == True:
                         self.img_data_cache[index] = img_feats
 
@@ -657,41 +690,56 @@ class EqaDataset(Dataset):
             # and load connectivity map for intermediate rewards
             if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
-                bbox_obj = [
-                    x for x in self.boxes[index]
-                    if x['type'] == 'object' and x['target'] == True
-                ][0]['box']
+                min_ = 1
+                bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]
+                trg_obj_name = bbox_obj['name']
+                bbox_obj = bbox_obj['box']
+                
+                bbox_obj_min = np.array([bbox_obj['min'][x] for x in range(3)])
+                bbox_obj_max = np.array([bbox_obj['max'][x] for x in range(3)])
 
                 for obj_id in self.env_loaded[self.env_list[index]].objects:
-                    box2 = self.env_loaded[self.env_list[index]].objects[
-                        obj_id]['bbox']
-                    if all([bbox_obj['min'][x] == box2['min'][x] for x in range(3)]) == True and \
-                        all([bbox_obj['max'][x] == box2['max'][x] for x in range(3)]) == True:
+                    box2 = self.env_loaded[self.env_list[index]].objects[obj_id]['bbox']
+                    ############################ SATYEN ######################################
+                    box2_min = np.array([box2['min'][x] for x in range(3) ])
+                    box2_max = np.array([box2['max'][x] for x in range(3) ])
+                    diff_min = np.mean(abs(bbox_obj_min - box2_min))
+                    diff_max = np.mean(abs(bbox_obj_max - box2_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
                         target_obj_id = obj_id
-                        break
-
-                bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False ][0]
+                    ############################################################################
+                
+                bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False][0]
+                min_ = 1
+                bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
+                bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
 
                 for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
-                    if all([room['bbox']['min'][i] == bbox_room['box']['min'][i] for i in range(3)]) and \
-                        all([room['bbox']['max'][i] == bbox_room['box']['max'][i] for i in range(3)]):
+                    ################ SATYEN ###############################################
+                    room_min = np.array([room['bbox']['min'][x] for x in range(3)])
+                    room_max = np.array([room['bbox']['max'][x] for x in range(3)])
+                    diff_min = np.mean(abs(room_min - bbox_room_min))
+                    diff_max = np.mean(abs(room_max - bbox_room_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
                         target_room = room
-                        break
+                    #########################################################################
+                
                 assert target_obj_id != False
                 assert target_room != False
                 self.env_loaded[self.env_list[index]].set_target_object(
-                    self.env_loaded[self.env_list[index]].objects[
-                        target_obj_id], target_room)
+                    self.env_loaded[self.env_list[index]].objects[target_obj_id], target_room)
 
-                # [NOTE] only works for batch size = 1
+                # [NOTE] only works for batch size = 1 <- Used in train_eqa
                 self.episode_pos_queue = self.pos_queue[index]
                 self.episode_house = self.env_loaded[self.env_list[index]]
                 self.target_room = target_room
-                self.target_obj = self.env_loaded[self.env_list[
-                    index]].objects[target_obj_id]
+                self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
 
-                return (idx, question, answer, False, actions_in, actions_out,
-                        action_length, mask)
+                return (idx, question, answer, False, actions_in, actions_out, action_length, mask)
 
             return (idx, question, answer, img_feats, actions_in, actions_out,
                     action_length, mask)
@@ -729,7 +777,7 @@ class EqaDataset(Dataset):
                     raw_img_feats = self.cnn(
                         Variable(torch.FloatTensor(images).to(self.device))).data.cpu().numpy().copy()
                     
-                    # Saty: Actions or which there are no image features?
+                    # Saty: Actions for which there are no image features?
                     # Raw img_feats.shape[1] = 3200
                     img_feats = np.zeros(
                         (self.actions.shape[1], raw_img_feats.shape[1]),
@@ -740,7 +788,7 @@ class EqaDataset(Dataset):
                     if self.to_cache == True:
                         self.img_data_cache[index] = img_feats
 
-            # LOL! Goes into this- since we're giving target+obj_conn_map_dir
+            # LOL! Goes into this- since we're giving target+obj_conn_map_dir, only for eqa
             if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
                 target_obj_id, target_room = False, False
                 min_ = 1
@@ -769,7 +817,6 @@ class EqaDataset(Dataset):
                         min_print = box2_min
                         max_print = box2_max
                         #obj_iter_id = self.env_loaded[self.env_list[index]].objects[obj_id]['id']
-                #sys.exit()
                     
                     #    target_obj_id = obj_id
                     #    break
@@ -816,12 +863,11 @@ class EqaDataset(Dataset):
                 self.env_loaded[self.env_list[index]].set_target_object(
                     self.env_loaded[self.env_list[index]].objects[target_obj_id], target_room)
 
-                # [NOTE] only works for batch size = 1
+                # [NOTE] only works for batch size = 1 <- Used in train_eqa
                 self.episode_pos_queue = self.pos_queue[index]
                 self.episode_house = self.env_loaded[self.env_list[index]]
                 self.target_room = target_room
                 self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
-                #print("Target OBJ!!:from env ", self.target_obj)
 
                 return (idx, question, answer, actions, action_length)
 
@@ -869,6 +915,122 @@ class EqaDataset(Dataset):
                     planner_action_length, planner_mask, controller_img_feats,
                     controller_actions_in, planner_hidden_idx, controller_out,
                     controller_action_length, controller_mask)
+
+        elif self.input_type in ['bottle']:
+            index = self.available_idx[index]
+
+            idx = self.idx[index]
+            question = self.questions[index]
+            answer = self.answers[index]
+
+            action_length = self.action_lengths[index]
+            actions = self.actions[index]
+
+            if self.split == 'train':
+                if self.to_cache == True and index in self.img_data_cache:
+                    img_feats = self.img_data_cache[index]
+                else:
+                    pos_queue = self.pos_queue[index][1:] #<- Ignore the starting position
+                    images = self.get_frames(
+                        self.env_loaded[self.env_list[index]],
+                        pos_queue,
+                        preprocess=True)
+                    
+                    raw_img_feats = self.cnn(
+                        Variable(torch.FloatTensor(images)
+                                 .to(self.device))).data.cpu().numpy().copy()
+                    img_feats = np.zeros(
+                        (self.actions.shape[1]-1, raw_img_feats.shape[1], raw_img_feats.shape[2], raw_img_feats.shape[3]), dtype=np.float32)
+
+                    img_feats[:raw_img_feats.shape[0], :, :, :] = raw_img_feats.copy()
+                    if self.to_cache == True:
+                        self.img_data_cache[index] = img_feats
+
+            prev_actions = actions[1:].clone() - 2
+            gt_actions = actions[2:].clone() - 2
+
+            # import pdb;pdb.set_trace()
+            pos_queue_ = np.zeros((self.actions.shape[1]-1, len(pos_queue[0])))
+            pos_queue_[:len(pos_queue) , :] = np.array(pos_queue)
+
+            mask_gt = gt_actions.clone().gt(-1)
+            mask_prev = prev_actions.clone().gt(-1)
+            
+            if len(prev_actions) > action_length-1:
+                prev_actions[action_length-1:].fill_(0)
+            
+            if len(gt_actions) > action_length-2:
+                gt_actions[action_length-2:].fill_(0)
+
+            if np.any(gt_actions.cpu().numpy()>2):
+                print("GT",gt_actions)
+                print("ACtion len", action_length)
+
+            if np.any(prev_actions.cpu().numpy()>2):
+                print("Prev ACtions",prev_actions)
+                print("ACtion len", action_length)
+
+            action_length = action_length -2
+            # CHECK ACtions here!
+            # for val or test (evaluation), or
+            # when target_obj_conn_map_dir is defined (reinforce),
+            # load entire shortest path navigation trajectory
+            # and load connectivity map for intermediate rewards
+            if self.split in ['val', 'test'] or self.target_obj_conn_map_dir != False:
+                target_obj_id, target_room = False, False
+                min_ = 1
+                bbox_obj = [x for x in self.boxes[index] if x['type'] == 'object' and x['target'] == True][0]
+                trg_obj_name = bbox_obj['name']
+                bbox_obj = bbox_obj['box']
+                
+                bbox_obj_min = np.array([bbox_obj['min'][x] for x in range(3)])
+                bbox_obj_max = np.array([bbox_obj['max'][x] for x in range(3)])
+
+                for obj_id in self.env_loaded[self.env_list[index]].objects:
+                    box2 = self.env_loaded[self.env_list[index]].objects[obj_id]['bbox']
+                    ############################ SATYEN ######################################
+                    box2_min = np.array([box2['min'][x] for x in range(3) ])
+                    box2_max = np.array([box2['max'][x] for x in range(3) ])
+                    diff_min = np.mean(abs(bbox_obj_min - box2_min))
+                    diff_max = np.mean(abs(bbox_obj_max - box2_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
+                        target_obj_id = obj_id
+                    ############################################################################
+                
+                bbox_room = [x for x in self.boxes[index] if x['type'] == 'room' and x['target'] == False][0]
+                min_ = 1
+                bbox_room_min = np.array([bbox_room['box']['min'][x] for x in range(3)])
+                bbox_room_max = np.array([bbox_room['box']['max'][x] for x in range(3)])
+
+                for room in self.env_loaded[self.env_list[index]].env.house.all_rooms:
+                    ################ SATYEN ###############################################
+                    room_min = np.array([room['bbox']['min'][x] for x in range(3)])
+                    room_max = np.array([room['bbox']['max'][x] for x in range(3)])
+                    diff_min = np.mean(abs(room_min - bbox_room_min))
+                    diff_max = np.mean(abs(room_max - bbox_room_max))
+                    
+                    if abs(diff_min + diff_max)/2 < min_:
+                        min_ = (diff_min + diff_max)/2
+                        target_room = room
+                    #########################################################################
+                
+                assert target_obj_id != False
+                assert target_room != False
+                self.env_loaded[self.env_list[index]].set_target_object(
+                    self.env_loaded[self.env_list[index]].objects[target_obj_id], target_room)
+
+                # [NOTE] only works for batch size = 1 <- Used in train_eqa
+                self.episode_pos_queue = self.pos_queue[index]
+                self.episode_house = self.env_loaded[self.env_list[index]]
+                self.target_room = target_room
+                self.target_obj = self.env_loaded[self.env_list[index]].objects[target_obj_id]
+
+                return (idx, question, answer, False, actions_out,self.episode_pos_queue, action_length, mask)
+
+            return idx, question, answer, img_feats, pos_queue_,prev_actions, gt_actions, action_length, mask_gt, mask_prev
+
 
     def __len__(self):
         if self.input_type == 'ques':

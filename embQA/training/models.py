@@ -19,7 +19,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import pdb
 
 def oneHot_vol(vec, dim):
-    batch_size, T_p  = vec.size()
+    batch_size, T_p  = vec.size(0)
     out = torch.zeros(batch_size, T_p, dim)
     for i in range(batch_size):
         out[i, np.arange(T_p), vec[i].long()] = 1
@@ -68,7 +68,6 @@ def get_state(m):
         state[k] = v.clone()
     return state
 
-
 def repackage_hidden(h, batch_size):
     # wraps hidden states in new Variables, to detach them from their history
     if type(h) == Variable:
@@ -77,14 +76,12 @@ def repackage_hidden(h, batch_size):
     else:
         return tuple(repackage_hidden(v, batch_size) for v in h)
 
-
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(),
                                    shared_model.parameters()):
         if shared_param.grad is not None:
             return
         shared_param._grad = param.grad
-
 
 class MaskedNLLCriterion(nn.Module):
     def __init__(self):
@@ -290,7 +287,7 @@ class MultitaskCNN(nn.Module):
         conv3 = self.conv_block3(conv2)
         conv4 = self.conv_block4(conv3)
 
-        return conv4.view(-1, 32 * 10 * 10)
+        return conv4
 
         # encoder_output = self.classifier(conv4)
 
@@ -327,7 +324,6 @@ class MultitaskCNN(nn.Module):
 
         # return out_seg, out_depth, out_ae
 
-
 class QuestionLstmEncoder(nn.Module):
     def __init__(self,
                  token_to_idx,
@@ -342,7 +338,6 @@ class QuestionLstmEncoder(nn.Module):
         self.END = token_to_idx['<END>']
 
         self.embed = nn.Embedding(len(token_to_idx), wordvec_dim)
-        print(self.embed)
         self.rnn = nn.LSTM(
             wordvec_dim,
             rnn_dim,
@@ -414,7 +409,6 @@ class VqaLstmModel(nn.Module):
         q_feats = self.rnn(questions)
         scores = self.classifier(q_feats)
         return scores
-
 
 class VqaLstmCnnAttentionModel(nn.Module):
     def __init__(self,
@@ -495,12 +489,11 @@ class VqaLstmCnnAttentionModel(nn.Module):
 
 # ----------- Nav -----------
 
-
 class NavCnnModel(nn.Module):
     def __init__(self,
                  num_frames=5,
-                 num_actions=4,
-                 question_input=False,
+                 num_actions=3,
+                 question_input=True,
                  question_vocab=False,
                  question_wordvec_dim=64,
                  question_hidden_dim=64,
@@ -513,8 +506,7 @@ class NavCnnModel(nn.Module):
 
         # cnn_kwargs = {'num_classes': 191, 'pretrained': True}
         # self.cnn = MultitaskCNN(**cnn_kwargs)
-        self.cnn_fc_layer = nn.Sequential(
-            nn.Linear(32 * 10 * 10, 64), nn.ReLU(), nn.Dropout(p=0.5))
+        # self.cnn_fc_layer = nn.Sequential(nn.Linear(32 * 10 * 10, 64), nn.ReLU(), nn.Dropout(p=0.5))
 
         self.question_input = question_input
         if self.question_input == True:
@@ -525,40 +517,53 @@ class NavCnnModel(nn.Module):
                 'rnn_num_layers': question_num_layers,
                 'rnn_dropout': question_dropout,
             }
+
             self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
-            self.ques_tr = nn.Sequential(
-                nn.Linear(64, 64), nn.ReLU(), nn.Dropout(p=0.5))
+            self.ques_tr = nn.Sequential(nn.Linear(64, 32), nn.ReLU(), nn.Dropout(p=0.5))
 
-        classifier_kwargs = {
-            'input_dim': 64 * num_frames + self.question_input * 64,
-            'hidden_dims': fc_dims,
-            'output_dim': num_actions,
-            'use_batchnorm': fc_use_batchnorm,
-            'dropout': fc_dropout,
-            'add_sigmoid': 0
-        }
-        self.classifier = build_mlp(**classifier_kwargs)
+        # classifier_kwargs = {
+        #     'input_dim': 64 * num_frames + self.question_input * 64,
+        #     'hidden_dims': fc_dims,
+        #     'output_dim': num_actions,
+        #     'use_batchnorm': fc_use_batchnorm,
+        #     'dropout': fc_dropout,
+        #     'add_sigmoid': 0
+        # }
 
+        # self.classifier = build_mlp(**classifier_kwargs)
+        self.num_actions = num_actions
+                                                  # Image frames  Quest  num_actions     pos_queue (x, y,z, yaw)
+        self.classifier = nn.Sequential(nn.Conv2d(32 * num_frames + 32 + self.num_actions + 4,  32, kernel_size=4,stride=2,padding=1), # SIze here is 5x5
+                                        nn.BatchNorm2d(32),
+                                        nn.ReLU(inplace=True),
+                                        nn.Conv2d(32, num_actions, kernel_size=5, stride=1, padding=0))
+    
     # batch forward, for supervised learning
-    def forward(self, img_feats, questions=None):
+    def forward(self, img_feats, actions_out_prev, pos_queue_curr, questions=None):
 
         # bs x 5 x 3200
-        N, T, _ = img_feats.size()
+        # N, T, _ = img_feats.size()
+        N, T, c, h,w = img_feats.size()
+        assert c == 32
+        assert h == 10
+        img_feats = img_feats.view(N ,32 * T,10,10) # size -> N, 165, 10,10
+        # img_feats = self.cnn_fc_layer(img_feats)
+        # img_feats = img_feats.view(N, T, -1)
+        # img_feats = img_feats.view(N, -1) 
 
-        img_feats = self.cnn_fc_layer(img_feats)
-
-        img_feats = img_feats.view(N, T, -1)
-        img_feats = img_feats.view(N, -1)
-
-        if self.question_input == True:
+        if self.question_input:
             ques_feats = self.q_rnn(questions)
             ques_feats = self.ques_tr(ques_feats)
+            ques_feats = ques_feats.view(N, 32, 1, 1).repeat(1,1,10,10)
+            actions_out_prev = actions_out_prev.view(N, self.num_actions,1,1).repeat(1,1,10,10)
+            _, p = pos_queue_curr.size()
+            pos_queue_curr = pos_queue_curr.view(N,p,1,1).repeat(1,1,10,10)
 
-            img_feats = torch.cat([ques_feats, img_feats], 1)
+            img_feats = torch.cat([ques_feats, img_feats, actions_out_prev, pos_queue_curr], 1)
 
         scores = self.classifier(img_feats)
 
-        return scores
+        return scores.view(N,self.num_actions)
 
 class NavRnnMult(nn.Module):
     def __init__(self,
@@ -818,8 +823,7 @@ class NavRnn(nn.Module):
             input_feats = torch.cat([input_feats, actions_OH], 2)
             # ^ This is working!
 
-        packed_input_feats = pack_padded_sequence(
-            input_feats, action_lengths, batch_first=True)
+        packed_input_feats = pack_padded_sequence(input_feats, action_lengths, batch_first=True)
         packed_output, hidden = self.rnn(packed_input_feats)
         rnn_output, _ = pad_packed_sequence(packed_output, batch_first=True)
         output = self.decoder(rnn_output.contiguous().view(
@@ -992,6 +996,7 @@ class NavCnnRnnModel(nn.Module):
                 'rnn_num_layers': question_num_layers,
                 'rnn_dropout': question_dropout,
             }
+
             self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
             self.ques_tr = nn.Sequential(
                 nn.Linear(64, 64), nn.ReLU(), nn.Dropout(p=0.5))
@@ -1151,8 +1156,6 @@ class NavPlannerControllerModel(nn.Module):
         # ^ make it similar to planner_scores
         
         controller_img_feats = controller_img_feats.contiguous().view(N_c * T_c, -1)
-        # print("Controller Actions in:", controller_actions_in[0])
-        # print("Size:", controller_actions_in.size())
         
         # controller_actions_embed = self.planner_nav_rnn.action_embed(controller_actions_in).view(N_c * T_c, -1)
         controller_actions_OH = Variable(oneHot_vol(controller_actions_in, 3).cuda())
@@ -1191,3 +1194,114 @@ class NavPlannerControllerModel(nn.Module):
         controller_scores = self.controller(controller_in)
 
         return controller_scores
+
+class HeiAnsNavModel(nn.Module):
+    def __init__(self,
+                 question_vocab,
+                 num_output=2,
+                 question_wordvec_dim=64,
+                 question_hidden_dim=64,
+                 question_num_layers=2,
+                 question_dropout=0.5,
+                 rnn_image_feat_dim=128,
+                 rnn_type='GRU',
+                 rnn_hidden_dim=1024,
+                 rnn_num_layers=1,
+                 rnn_dropout=0,
+                 num_actions=4):
+        super(HeiAnsNavModel, self).__init__()
+
+        self.cnn_fc_layer = nn.Sequential(
+            nn.Linear(32 * 10 * 10, rnn_image_feat_dim),
+            nn.ReLU(),
+            nn.Dropout(p=0.5))
+
+        q_rnn_kwargs = {
+            'token_to_idx': question_vocab['questionTokenToIdx'],
+            'wordvec_dim': question_wordvec_dim,
+            'rnn_dim': question_hidden_dim,
+            'rnn_num_layers': question_num_layers,
+            'rnn_dropout': question_dropout,
+        }
+        self.q_rnn = QuestionLstmEncoder(**q_rnn_kwargs)
+
+        # Saty: Fine tunes Question embedding obtained from the question LSTM Encoder. Ue GRU, here instead?
+        # we aren't concerned about the cell state, are we? 
+        self.ques_tr = nn.Sequential(
+            nn.Linear(question_hidden_dim, question_hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(p=0.5))
+
+        # self.planner_nav_rnn = NavRnn(
+        #     image_input=True,
+        #     image_feat_dim=planner_rnn_image_feat_dim,
+        #     question_input=True,
+        #     question_embed_dim=question_hidden_dim,
+        #     action_input=True,
+        #     action_embed_dim=planner_rnn_action_embed_dim,
+        #     num_actions=num_output,
+        #     rnn_type=planner_rnn_type,
+        #     rnn_hidden_dim=planner_rnn_hidden_dim,
+        #     rnn_num_layers=planner_rnn_num_layers,
+        #     rnn_dropout=planner_rnn_dropout,
+        #     return_states=True)
+
+        rnn_input_dim = question_hidden_dim + rnn_image_feat_dim + num_actions
+        self.rnn_type = rnn_type
+        self.rnn_hidden_dim = rnn_hidden_dim
+        self.rnn_num_layers = rnn_num_layers
+
+        self.rnn = getattr(nn, self.rnn_type)(
+            rnn_input_dim,
+            self.rnn_hidden_dim,
+            self.rnn_num_layers,
+            dropout=rnn_dropout,
+            batch_first=True)
+        print('Building %s with hidden dim: %d' % (self.rnn_type,
+                                                   rnn_hidden_dim))
+        self.decoder = nn.Linear(rnn_hidden_dim, num_output)
+
+    def init_hidden(self, bsz):
+        weight = next(self.parameters()).data
+        if self.rnn_type == 'LSTM':
+            return (Variable(
+                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
+                .zero_()), Variable(
+                    weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
+                    .zero_()))
+        elif self.rnn_type == 'GRU':
+            return Variable(
+                weight.new(self.rnn_num_layers, bsz, self.rnn_hidden_dim)
+                .zero_())
+
+    def forward(self,questions,img_feats,  actions_in, action_lengths=None, hidden=None, step=None):
+
+        # ts = time.time()
+        # N_p = batch_size
+        # T_p = max len actions
+        N_p, T_p, _ = img_feats.size()
+
+        # get image features for when planner executes action and controller
+        img_feats = self.cnn_fc_layer(img_feats)
+
+        # Question encoding
+        ques_feats = self.q_rnn(questions)
+        ques_feats = self.ques_tr(ques_feats)
+        N, D = ques_feats.size()
+        ques_feats = ques_feats.view(N, 1, D)
+        ques_feats = ques_feats.repeat(1, T_p, 1)
+
+        # Satty: Get OH volume (Batch_size, Time Steps, num_actions)
+        action_OH = Variable(oneHot_vol(actions_in, 4).cuda())
+        input_feats = torch.cat([img_feats, ques_feats, action_OH], dim = 2)
+        if step:
+            assert hidden is not None
+            output, hidden = self.rnn(input_feats, hidden)
+        else:
+            packed_input_feats = pack_padded_sequence(input_feats, action_lengths, batch_first=True)
+            packed_output, hidden = self.rnn(packed_input_feats)
+            output, _ = pad_packed_sequence(packed_output, batch_first=True)
+
+        scores = self.decoder(output.contiguous().view(-1, output.size(2)))
+
+        return scores, hidden
