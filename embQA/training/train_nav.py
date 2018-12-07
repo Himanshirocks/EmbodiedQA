@@ -1188,7 +1188,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='data/500')
+        default='/home/ubuntu/space/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(
