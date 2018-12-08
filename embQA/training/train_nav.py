@@ -33,6 +33,50 @@ except AttributeError:
     torch._utils._rebuild_tensor_v2 = _rebuild_tensor_v2
 
 ################################################################################################
+def oneHot(vec, dim):
+    batch_size = vec.size(0)
+    out = torch.zeros(batch_size, dim)
+    out[np.arange(batch_size), vec.long()] = 1
+    return out
+
+def load_semantic_classes(color_file):
+    if color_file is None:
+        raise ValueError('please input colormap_fine.csv file')
+
+    semantic_classes = {}
+
+    with open(color_file) as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                # OpenCV is in BGR Format
+                c = np.array((row['r'], row['g'], row['b']), dtype=np.uint8)
+                fine_cat = row['name'].lower()
+                semantic_classes[fine_cat] = c
+
+    return semantic_classes
+
+def coverage(img, target_obj_class, semantic_classes):
+    
+    hei, wid, _ = img.shape
+    trgt_obj_col = semantic_classes[target_obj_class]
+    mask = np.all(img == trgt_obj_col, axis=2)
+    cov = np.sum(mask)/(hei * wid)
+    
+    return cov
+
+def avgCov(cov_dict):
+    """ calculate avg coverage for the last 5 frames for all batches"""
+    total = 0
+    count_ = 0
+    
+    for t in list(cov_dict.keys()):
+        for num in list(cov_dict[t].keys()):
+            for i in list(cov_dict[t][num].keys()):
+                cov_epi = cov_dict[t][num][i][-6:-1]
+                total += np.sum(np.array(cov_epi))
+                count_ += 1
+    
+    return total/count_
 
 def eval(rank, args, shared_model, best_eval_acc):
 
@@ -103,6 +147,9 @@ def eval(rank, args, shared_model, best_eval_acc):
     print('eval_loader has %d samples' % len(eval_loader.dataset))
     logging.info("EVAL: eval_loader has {} samples".format(len(eval_loader.dataset)))
 
+    #Saty:
+    semantic_classes = load_semantic_classes(eval_loader.dataset.cfg['colorFile'])
+    coverage_log = defaultdict(dict)
     args.output_log_path = os.path.join(args.log_dir,
                                         'eval_' + str(rank) + '.json')
 
@@ -607,6 +654,8 @@ def eval(rank, args, shared_model, best_eval_acc):
                         planner_step = True
                         action = int(controller_action_in)
 
+                        cov_batch_i = []
+
                         for step in range(args.max_episode_length):
                             if not first_step:
                                 img = torch.from_numpy(img.transpose(
@@ -663,11 +712,19 @@ def eval(rank, args, shared_model, best_eval_acc):
                                 h3d.env.cam.pos.x, h3d.env.cam.pos.y,
                                 h3d.env.cam.pos.z, h3d.env.cam.yaw
                             ])
-                            
-			    
-                            if episode_done:
-                                break
+                            # Saty: semantic maps here
+                            target_obj = eval_loader.dataset.target_obj['fine_class']
+                            img_semantic = h3d.env.render(mode='semantic')
+                            cov = coverage(img_semantic, target_obj, semantic_classes)
+                            cov_batch_i.append(cov)
 
+                            if episode_done:
+                                cov_batch_i.append(target_obj)
+                                if num not in coverage_log[t].keys():
+                                    coverage_log[t][num] = {}
+                                coverage_log[t][num].update({i:cov_batch_i})    
+                                break
+                                
                             img, _, _ = h3d.step(action)
                             #cv2.imwrite('{}-{}-{}-{}.png'.format(num, i, episode_length, time_img), img)
                             if args.render:
@@ -735,6 +792,7 @@ def eval(rank, args, shared_model, best_eval_acc):
                     done = True
 
         epoch += 1
+        cov_avg = avgCov(coverage_log)
 
         # checkpoint if best val loss
         if metrics.metrics[8][0] > best_eval_acc:  # d_D_50
@@ -758,7 +816,7 @@ def eval(rank, args, shared_model, best_eval_acc):
                 logging.info("EVAL: Saving checkpoint to {}".format(checkpoint_path))
                 torch.save(checkpoint, checkpoint_path)
 
-        print('[best_eval_d_D_50:%.04f]' % best_eval_acc)
+        print('[best_eval_d_D_50:%.04f; best Coverage:%.04f]' % (best_eval_acc, best_cov))
         logging.info("EVAL: [best_eval_d_D_50:{0:.2f}]".format(best_eval_acc))
 
         eval_loader.dataset._load_envs(start_idx=0, in_order=True)
@@ -1188,7 +1246,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '-target_obj_conn_map_dir',
-        default='/home/ubuntu/space/500')
+        default='data/500')
     parser.add_argument('-map_resolution', default=500, type=int)
 
     parser.add_argument(

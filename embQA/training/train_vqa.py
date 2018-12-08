@@ -15,11 +15,11 @@ from torch.autograd import Variable
 torch.backends.cudnn.enabled = False
 import torch.multiprocessing as mp
 
-from models import VqaLstmModel, VqaLstmCnnAttentionModel
+from models_vqa import VqaLstmModel, VqaLstmCnnAttentionModel
 from data import EqaDataset, EqaDataLoader
 from metrics import VqaMetric
 
-from models import get_state, repackage_hidden, ensure_shared_grads
+from models_vqa import get_state, repackage_hidden, ensure_shared_grads
 from data import load_vocab
 
 import pdb
@@ -294,8 +294,8 @@ def train(rank, args, shared_model):
                 #p+=1
                 for num, batch in enumerate(train_loader):
                     #pp=0
-                         done = True
-                         break
+                        #  done = True
+                        #  break
 
                     model.load_state_dict(shared_model.state_dict())
                     model.cuda()
